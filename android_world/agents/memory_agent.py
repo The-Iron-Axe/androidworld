@@ -320,6 +320,12 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     if not self.enable_u2 or self.u2 is None:
       return
 
+    # Replayed trajectories are re-consumed memories, not new experiences;
+    # do not re-store them (§3.2.2).  Replayed history entries carry
+    # u2_replayed=True, and _end_replay() clears the buffered goal.
+    if goal is None or any(h.get("u2_replayed") for h in self.history):
+      return
+
     trajectory: list[ObsAct] = []
     for i, hist in enumerate(self.history):
       action = hist.get("action_output_json")
@@ -383,6 +389,14 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return rebound
     return action
 
+  def _end_replay(self) -> None:
+    """Terminate replay and drop the buffered goal so nothing is re-stored."""
+    self._replay_active = False
+    self._replay_entry = None
+    self._replay_index = 0
+    self._replay_trajectory = []
+    self._pending_trajectory_goal = None
+
   def _step_replay(self, goal: str):
     """Execute the next cached action. Returns (done, step_data)."""
     step_data = {
@@ -405,10 +419,7 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
 
     trajectory = self._replay_trajectory
     if self._replay_index >= len(trajectory):
-      self._replay_active = False
-      self._replay_entry = None
-      self._replay_index = 0
-      self._replay_trajectory = []
+      self._end_replay()
       step_data["summary"] = "Replayed full trajectory; task step complete."
       self.history.append(step_data)
       return True, step_data
@@ -428,10 +439,7 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
 
     if action.action_type == json_action.STATUS:
       done = action.goal_status != "infeasible"
-      self._replay_active = False
-      self._replay_entry = None
-      self._replay_index = 0
-      self._replay_trajectory = []
+      self._end_replay()
       step_data["summary"] = "Replayed memory declared sub-task %s." % (
           "completed" if done else "infeasible"
       )
@@ -456,10 +464,7 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       logging.warning("U2 [%s] — replay action failed: %s", goal, e)
       step_data["summary"] = f"Replay action failed: {e}"
       self.history.append(step_data)
-      self._replay_active = False
-      self._replay_entry = None
-      self._replay_index = 0
-      self._replay_trajectory = []
+      self._end_replay()
       return False, step_data
 
     remaining = len(trajectory) - self._replay_index
