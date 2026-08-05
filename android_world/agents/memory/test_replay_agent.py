@@ -1,5 +1,7 @@
 """Offline tests for MemoryAugmentedAgent deterministic replay (U2)."""
 
+import unittest
+
 from android_world.agents import memory_agent
 from android_world.agents.memory.episodic import ObsAct
 from android_world.env import json_action
@@ -83,7 +85,7 @@ def _traj_open_click():
   ]
 
 
-class TestReplay:
+class TestReplay(unittest.TestCase):
   def test_replay_executes_cached_trajectory_without_llm(self):
     env = _FakeEnv()
     agent = _make_agent(env, _FakeLLM())
@@ -186,3 +188,53 @@ class TestReplay:
     assert not r1.done
     assert "infeasible" in r1.data["summary"]
     assert not agent._replay_active
+
+  def test_replay_off_when_u2_disabled(self):
+    env = _FakeEnv()
+    agent = memory_agent.MemoryAugmentedAgent(
+        env, _FakeLLM(), enable_u1=True, enable_u2=False, enable_u3=False
+    )
+    # U2 disabled -> replay never activates.
+    self.assertFalse(agent._replay_active)
+    self.assertIsNone(agent.u2)
+
+  def test_u1_only_initializes_u1(self):
+    env = _FakeEnv()
+    agent = memory_agent.MemoryAugmentedAgent(
+        env, _FakeLLM(), enable_u1=True, enable_u2=False, enable_u3=False
+    )
+    self.assertTrue(agent.enable_u1)
+    self.assertFalse(agent.enable_u2)
+    self.assertFalse(agent.enable_u3)
+    self.assertIsNone(agent.u2)   # u2 未初始化
+    self.assertIsNone(agent.u3)   # u3 未初始化
+
+  def test_u1_u2_initializes_u2_only(self):
+    env = _FakeEnv()
+    agent = memory_agent.MemoryAugmentedAgent(
+        env, _FakeLLM(), enable_u1=True, enable_u2=True, enable_u3=False
+    )
+    self.assertIsNotNone(agent.u2)
+    self.assertIsNone(agent.u3)
+    # u1 是 lazy 的：首次 _build_action_prompt 才 init，这里验证未主动初始化
+    self.assertIsNone(agent.u1)
+
+  def test_u1_u2_u3_all_enabled_constructs(self):
+    env = _FakeEnv()
+    agent = memory_agent.MemoryAugmentedAgent(
+        env, _FakeLLM(), enable_u1=True, enable_u2=True, enable_u3=True,
+        rag_url=None,
+    )
+    self.assertTrue(agent.enable_u1)
+    self.assertTrue(agent.enable_u2)
+    self.assertTrue(agent.enable_u3)
+    self.assertIsNotNone(agent.u2)
+    self.assertIsNotNone(agent.u3)
+
+  def test_no_replay_state_without_u2(self):
+    env = _FakeEnv()
+    agent = memory_agent.MemoryAugmentedAgent(
+        env, _FakeLLM(), enable_u1=False, enable_u2=False, enable_u3=False
+    )
+    # step() 直接走 M3A LLM 路径；_replay_active 保持 False
+    self.assertFalse(agent._replay_active)
