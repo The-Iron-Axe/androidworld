@@ -98,9 +98,11 @@ class EpisodicMemory:
     self._active_entry: MemoryEntry | None = None
     # Freshly stored trajectory in the current task (credit its first outcome)
     self._last_added_entry: MemoryEntry | None = None
-    # Per-(goal, precondition) retrieval cache — cleared after each task so
-    # one episode only queries the bank once.
-    self._retrieval_cache: dict[tuple[str, str | None], str] = {}
+    # Per-key retrieval cache — cleared after each task so one episode only
+    # queries the bank once.  Keys are (goal, precondition) for hints and
+    # ("replay", goal, precondition) for replay trajectories; values are the
+    # hint string, the replayed trajectory list, or None on a cache miss.
+    self._retrieval_cache: dict[tuple[str, ...], str | list[ObsAct] | None] = {}
 
     # Episode-outcome counters for global failure rate T_global (§3.2.4)
     self._episode_successes: int = 0
@@ -176,15 +178,10 @@ class EpisodicMemory:
       return None
 
     entry = result.entry
-    # Load trajectory from disk (decoupled storage).  After a reload from
-    # disk, entry.trajectory is empty (load() keeps only the index), so we
-    # must always re-read the pickle regardless of trajectory_length.
-    trajectory = self.bank._load_trajectory(entry)
-    if not trajectory:
-      print(f"[U2] retrieve goal={goal[:50]!r} -> hit score={result.score:.3f} but empty trajectory")
-      return None
-
-    entry.trajectory = trajectory  # ensure loaded for deterministic replay
+    # The DMS retrieve() already loaded the trajectory from disk on a
+    # definitive hit, so entry.trajectory is guaranteed non-empty here
+    # (miss / risk-block / mutation / None-entry all returned above).
+    trajectory = entry.trajectory
     self._active_entry = entry
     print(
         f"[U2] retrieve goal={goal[:50]!r} -> HIT score={result.score:.3f} "
@@ -196,7 +193,6 @@ class EpisodicMemory:
       self,
       goal: str,
       precondition: str | None = None,
-      T_global: float = 0.5,
   ) -> str:
     """Return a compact memory hint string for injection into the prompt.
 
@@ -211,7 +207,6 @@ class EpisodicMemory:
       precondition: Optional UI-state description.  When provided, enables
         the dual-factor retrieval (§3.2.2) which matches both the starting
         state context AND the goal, reducing false positives.
-      T_global: Global failure rate for dynamic thresholding (§3.2.4).
     """
     cache_key = (goal, precondition or "")
     if cache_key in self._retrieval_cache:
@@ -240,7 +235,7 @@ class EpisodicMemory:
     cache_key = ("replay", goal, precondition or "")
     if cache_key in self._retrieval_cache:
       value = self._retrieval_cache[cache_key]
-      return value if isinstance(value, list) else None
+      return list(value) if isinstance(value, list) else None
 
     entry = self._retrieve_entry(goal, precondition)
     if entry is None:

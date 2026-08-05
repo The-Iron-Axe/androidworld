@@ -198,24 +198,37 @@ class GlobalFailureRateTest(unittest.TestCase):
 
 class EpisodicMemoryReplayTest(unittest.TestCase):
 
-    def test_retrieve_replay_returns_trajectory_on_hit(self):
+    def _make_memory(self, persistence_dir: str):
+        # Shared with the whole-task/sub-plan tests: FakeBackend (no network,
+        # no SentenceTransformer) and ε-mutation off so the deterministic
+        # replay hit path is asserted.  With the default epsilon=0.1 the
+        # mutation roll would make retrieve_replay intermittently return None.
         config = DMSConfig()
-        # Force DMS ε-mutation off so this test asserts the deterministic
-        # replay hit path (matches the whole-task/sub-plan tests above).  With
-        # the default epsilon=0.1 the mutation roll is non-deterministic and
-        # this test would intermittently flake (retrieve_replay returns None).
+        config.disk_storage_dir = persistence_dir
         config.epsilon = 0.0
+        mem = EpisodicMemory(config=config, persistence_dir=persistence_dir)
+        mem._initialized = True
+        mem.bank._embedder = FakeBackend()
+        mem.bank._embedder_initialized = True
+        return mem
+
+    def test_retrieve_replay_returns_trajectory_on_hit(self):
         with tempfile.TemporaryDirectory() as d:
-            u2 = EpisodicMemory(config=config, persistence_dir=d)
-            u2.init_embedding(corpus_texts=["open app then click save"])
+            u2 = self._make_memory(d)
             goal = "Save a file"
+            precondition = "Markor main screen"
             traj = [ObsAct(observation="step_0", action=json_action.JSONAction(action_type="open_app", app_name="Files"), step_index=0),
                     ObsAct(observation="step_1", action=json_action.JSONAction(action_type="click", index=2), step_index=1)]
-            u2.add_trajectory(goal, traj)
-            replay = u2.retrieve_replay(goal)
-            assert replay is not None
-            assert len(replay) == 2
-            assert replay[0].action.action_type == "open_app"
+            u2.add_trajectory(goal, traj, precondition=precondition)
+            replay = u2.retrieve_replay(goal, precondition=precondition)
+            self.assertIsNotNone(replay)
+            self.assertEqual(len(replay), 2)
+            self.assertEqual(replay[0].action.action_type, "open_app")
+
+    def test_retrieve_replay_returns_none_on_miss(self):
+        with tempfile.TemporaryDirectory() as d:
+            u2 = self._make_memory(d)
+            self.assertIsNone(u2.retrieve_replay("A goal never stored before"))
 
 
 if __name__ == "__main__":
