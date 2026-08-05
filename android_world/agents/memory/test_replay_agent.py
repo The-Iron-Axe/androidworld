@@ -55,14 +55,15 @@ def _make_agent(env, llm):
 
 
 def _stub_hit(agent, traj, memory_id="stub"):
-  """Stub U2 retrieval to always hit with `traj` and set a stub active entry.
+  """Stub U2 sub-plan retrieval to always hit with `traj` and set a stub
+  active entry.
 
   _active_entry must be a non-None object for _start_replay's _load_trajectory;
-  use a MemoryEntry-like stub.  Since retrieve_replay is stubbed, _start_replay
-  calls u2.bank._load_trajectory(entry) on a real bank with no such file -> []
-  so it falls back to list(trajectory).
+  use a MemoryEntry-like stub.  Since retrieve_sub_plan_replay is stubbed,
+  _start_replay calls u2.bank._load_trajectory(entry) on a real bank with no
+  such file -> [] so it falls back to list(trajectory).
   """
-  agent.u2.retrieve_replay = lambda goal, precondition=None: list(traj)
+  agent.u2.retrieve_sub_plan_replay = lambda plan, T_global=0.5: list(traj)
 
   # NOTE: the class body cannot read `memory_id` directly (assigning it in the
   # class namespace makes it a class-local before the RHS is evaluated), so

@@ -132,6 +132,31 @@ class EpisodicMemorySubPlanTest(unittest.TestCase):
             hit = mem.retrieve_sub_plan_hint(plan_a)
             self.assertNotEqual(hit, "")
 
+    def test_retrieve_sub_plan_replay_returns_trajectory(self):
+        """Sub-plan-level deterministic replay: retrieve_replay but keyed by
+        Plan, so a future multi-agent Planner can fetch each sub-plan's cached
+        trajectory independently."""
+        with tempfile.TemporaryDirectory() as d:
+            mem = self._make_memory(d)
+            plan = Plan(precondition="Markor main screen", goal="Create a new note")
+            traj = [
+                ObsAct(observation="step_0", action="click", step_index=0),
+                ObsAct(observation="step_1", action="input_text", step_index=1),
+            ]
+            mem.add_sub_plan(plan, traj)
+            self.assertEqual(mem.size, 1)
+
+            replay = mem.retrieve_sub_plan_replay(plan)
+            self.assertIsNotNone(replay)
+            self.assertEqual(len(replay), 2)
+            self.assertEqual(replay[0].action, "click")
+
+    def test_retrieve_sub_plan_replay_returns_none_on_miss(self):
+        with tempfile.TemporaryDirectory() as d:
+            mem = self._make_memory(d)
+            plan = Plan(precondition="Home", goal="Send an SMS")
+            self.assertIsNone(mem.retrieve_sub_plan_replay(plan))
+
 
 class EpisodicMemoryWholeTaskTest(unittest.TestCase):
 

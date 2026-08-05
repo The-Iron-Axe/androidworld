@@ -312,6 +312,53 @@ class EpisodicMemory:
     self._active_entry = entry
     return hint
 
+  def retrieve_sub_plan_replay(
+      self, plan: Plan, T_global: float = 0.5
+  ) -> list[ObsAct] | None:
+    """Return the full cached trajectory for a sub-plan, for deterministic
+    replay (§3.2.2).
+
+    Symmetric to retrieve_replay (goal-level) but keyed by a Plan, so a
+    future multi-agent Planner can fetch each sub-plan's cached trajectory
+    independently.  Returns a fresh list copy; None on miss / risk-block /
+    mutation / empty trajectory.
+
+    This is the data-layer seam the (not-yet-implemented) Planner plugs into:
+    it retrieves and stores memories at sub-plan granularity today, and the
+    Planner decomposition will be layered on top without changing this API.
+    """
+    if not self._initialized:
+      self.init_embedding()
+
+    result: RetrievalResult = self.bank.retrieve(
+        plan,
+        current_logical_time=self.bank.logical_time,
+        T_global=T_global,
+    )
+
+    if not result.hit:
+      return None
+    if result.risk_blocked:
+      print(f"[U2] sub-plan replay {plan.goal[:40]!r} -> RISK-BLOCKED")
+      return None
+    if result.entry is None:
+      return None
+    if result.should_mutate:
+      print(f"[U2] sub-plan replay {plan.goal[:40]!r} -> eps-MUTATION")
+      self._active_entry = result.entry
+      return None
+
+    entry = result.entry
+    trajectory = self.bank._load_trajectory(entry)
+    if not trajectory:
+      return None
+    self._active_entry = entry
+    print(
+        f"[U2] sub-plan replay {plan.goal[:40]!r} -> HIT "
+        f"score={result.score:.3f} steps={len(trajectory)}"
+    )
+    return list(trajectory)
+
   def add_sub_plan(
       self,
       plan: Plan,

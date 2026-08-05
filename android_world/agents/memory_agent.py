@@ -25,7 +25,7 @@ from android_world.agents import m3a_utils
 from android_world.agents.memory.environment import (
     EnvKnowledge, build_screen_summary,
 )
-from android_world.agents.memory.episodic import EpisodicMemory, ObsAct
+from android_world.agents.memory.episodic import EpisodicMemory, ObsAct, Plan
 from android_world.agents.memory.task_state import (
     TaskState,
     extract_app_from_elements,
@@ -304,6 +304,25 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return
     self._pending_trajectory_goal = goal
 
+  # ── Sub-plan decomposition seam (Planner placeholder) ──────────────────
+  #
+  # This is the extension point for the future multi-agent design.  The
+  # current implementation treats the whole task goal as a single sub-plan,
+  # so all U2 memory operations below run at task granularity — exactly the
+  # pre-existing behaviour.  When the multi-agent Planner is wired in, it
+  # will return multiple Plan(precondition, goal) entries here and the
+  # retrieval / replay / storage loops below will automatically operate at
+  # sub-plan granularity with no further changes.
+
+  def _decompose_into_subplans(self, goal: str) -> list[Plan]:
+    """PLACEHOLDER: decompose `goal` into a sequence of sub-plans.
+
+    Currently returns the whole task as one sub-plan (precondition empty),
+    preserving today's task-level U2 behaviour.  The multi-agent Planner
+    will override this to return a real {p1, ..., pk} sequence (§3.1).
+    """
+    return [Plan(precondition="", goal=goal)]
+
   # ── Internal ────────────────────────────────────────────────────────
 
   def _flush_u2_trajectory(
@@ -475,18 +494,26 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     return False, step_data
 
   def step(self, goal: str) -> base_agent.AgentInteractionResult:
-    """Execute one interaction step; if U2 has a cached trajectory, replay it."""
+    """Execute one interaction step; if U2 has a cached trajectory, replay it.
+
+    The task goal is decomposed into sub-plans via _decompose_into_subplans
+    (currently a single task-level sub-plan).  On the first step with U2
+    enabled, each sub-plan is checked for a cached trajectory and replayed
+    deterministically (§3.2.2) before falling back to the LLM.
+    """
     # Active replay: execute the next cached action (§3.2.2).
     if self._replay_active:
       done, step_data = self._step_replay(goal)
       return base_agent.AgentInteractionResult(done, step_data)
 
-    # First step of the task with U2 enabled: try deterministic replay.
+    # First step of the task with U2 enabled: try deterministic replay for
+    # each sub-plan.
     if self.enable_u2 and self.u2 is not None and len(self.history) == 0:
-      trajectory = self.u2.retrieve_replay(goal)
-      if trajectory:
-        self._start_replay(trajectory, self.u2._active_entry)
-        done, step_data = self._step_replay(goal)
-        return base_agent.AgentInteractionResult(done, step_data)
+      for plan in self._decompose_into_subplans(goal):
+        trajectory = self.u2.retrieve_sub_plan_replay(plan)
+        if trajectory:
+          self._start_replay(trajectory, self.u2._active_entry)
+          done, step_data = self._step_replay(goal)
+          return base_agent.AgentInteractionResult(done, step_data)
 
     return super().step(goal)
