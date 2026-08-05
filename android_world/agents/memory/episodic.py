@@ -31,7 +31,8 @@ from typing import Any
 
 from android_world.agents.memory import dms_bridge
 from android_world.agents.memory.dms_bridge import (
-    DMSConfig, MemoryBank, MemoryEntry, ObsAct, Plan, RetrievalResult,
+    DMSConfig, KVerifier, MemoryBank, MemoryEntry, ObsAct, Plan,
+    RetrievalResult,
 )
 
 
@@ -107,6 +108,9 @@ class EpisodicMemory:
     # Episode-outcome counters for global failure rate T_global (§3.2.4)
     self._episode_successes: int = 0
     self._episode_failures: int = 0
+
+    # K-Verification (Appendix D): K=3 strikes → prune.
+    self._kverifier = KVerifier(self.config)
 
     if persistence_dir:
       os.makedirs(persistence_dir, exist_ok=True)
@@ -380,9 +384,9 @@ class EpisodicMemory:
         self._active_entry.meta.success_count += 1
       else:
         self._active_entry.meta.failure_count += 1
-        # K-Verification: 3 strikes → prune
-        self._active_entry.meta.verification_failures += 1
-        if self._active_entry.meta.verification_failures >= self.config.K_verify:
+        # K-Verification (Appendix D): K strikes → prune
+        should_prune = self._kverifier.record_failure(self._active_entry)
+        if should_prune:
           self.bank._remove_entry(self._active_entry)
           print(
               f"[U2] finalize goal={goal[:50]!r} success={success} -> "
@@ -439,9 +443,9 @@ class EpisodicMemory:
   def record_episode_outcome(self, success: bool) -> None:
     """Track episode-level success/failure for the global failure rate.
 
-    The global failure rate T_global feeds the dynamic risk threshold
-    (§3.2.4).  This is a lightweight per-episode tracker — it is NOT a
-    per-plan Bayesian model (that requires a Planner to name plans).
+    T_global feeds the dynamic risk threshold (§3.2.4).  Both exploration
+    and replay episodes are counted here — replay is not re-stored, but
+    its outcome still reflects system health.
     """
     if success:
       self._episode_successes += 1
@@ -450,7 +454,14 @@ class EpisodicMemory:
 
   @property
   def global_failure_rate(self) -> float:
-    """Smoothed global failure rate T_global (Bayesian prior + observed)."""
+    """Smoothed global failure rate T_global (Bayesian prior + observed).
+
+    T_global is a *global* failure rate (§3.2.4): it comes from episode
+    outcomes only.  Both exploration and replay episodes feed the same
+    counter via record_episode_outcome, so the dynamic risk threshold
+    stays stable across rounds.  Per-goal feedback is intentionally NOT
+    tracked here (U2 has no Planner to name plans).
+    """
     total = self._episode_failures + self._episode_successes
     if total == 0:
       return 0.5  # Uniform prior

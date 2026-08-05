@@ -195,6 +195,24 @@ class GlobalFailureRateTest(unittest.TestCase):
             # (0 + 2*0.5) / (10 + 2) = 1/12 ≈ 0.0833
             self.assertAlmostEqual(rate, 1 / 12)
 
+    def test_global_failure_rate_ignores_plan_stats(self):
+        """T_global must come from episode outcomes only; there is no
+        per-plan feedback path in U2 (no Planner), so replay-heavy rounds
+        don't skew the dynamic risk threshold."""
+        with tempfile.TemporaryDirectory() as d:
+            config = DMSConfig()
+            config.disk_storage_dir = d
+            mem = EpisodicMemory(config=config, persistence_dir=d)
+            # No plan-stats mechanism exists on EpisodicMemory.
+            self.assertFalse(hasattr(mem, "_plan_stats"))
+            # Without episode outcomes, rate stays at uniform prior 0.5.
+            self.assertAlmostEqual(mem.global_failure_rate, 0.5)
+            # With episode outcomes, rate reflects episodes only.
+            mem.record_episode_outcome(True)
+            mem.record_episode_outcome(True)
+            mem.record_episode_outcome(False)
+            self.assertAlmostEqual(mem.global_failure_rate, 0.4)
+
 
 class EpisodicMemoryReplayTest(unittest.TestCase):
 
