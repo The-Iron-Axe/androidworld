@@ -661,32 +661,25 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       success = success and self._certified
     super().set_episode_success(success)
 
-  # ── U4 step-level credit (via verdicts) ───────────────────────────────
+  # ── U4 episode feedback (ground-truth outcome) ────────────────────────
 
   def _flush_u4_trajectory(self, success: bool) -> None:
-    """U4 feedback honors per-step Action Verifier verdicts.
+    """Feed the finished episode into U4 using the ground-truth outcome.
 
-    A trajectory whose every UI step was CORRECT is mined as a clean success;
-    a trajectory with any MISGROUNDED/NO_EFFECT step is fed to U4 as a failure
-    (step-level penalty) rather than buffered for skill mining.
+    A successful episode is always buffered for positive-skill mining; a failed
+    episode is buffered for negative-skill mining AND score-penalizes any
+    matched skill (both handled by the parent).  The per-step Action Verifier
+    verdicts (`_step_verdicts`) are still recorded and are available to
+    callers, but they no longer gate skill mining — any ground-truth success
+    feeds U4, so skills can accumulate even when individual steps weren't all
+    CORRECT.
     """
     if not self._multiagent:
       super()._flush_u4_trajectory(success)
       return
     if not self.enable_u4 or self.u4 is None:
       return
-    # Fail closed: an empty verdict list means no UI step was actually
-    # verified (e.g. replay-only episode) — do not treat it as a clean
-    # success for skill mining.
-    all_correct = bool(self._step_verdicts) and all(
-        v.verdict == "CORRECT" for v in self._step_verdicts
-    )
-    if success and all_correct:
-      super()._flush_u4_trajectory(True)
-    else:
-      goal = getattr(self, "_current_goal", "")
-      if goal:
-        self.u4.record_outcome(goal, success=False)
+    super()._flush_u4_trajectory(success)
 
 
 class _NullClaim:

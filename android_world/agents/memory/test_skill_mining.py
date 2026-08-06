@@ -1,6 +1,7 @@
 # android_world/agents/memory/test_skill_mining.py
 import os
 import sys
+import tempfile
 import unittest
 
 _REPO_ROOT = os.path.dirname(
@@ -130,6 +131,25 @@ class MineSkillsTest(unittest.TestCase):
     self.assertIn("slot", sk.actions[1].target or "")
     self.assertTrue(sk.slots)
 
+  def test_mine_negative_kind(self):
+    """Failed trajectories mine into negative 'avoid' skills."""
+    traj = [
+      [_act("click", index=1), _act("input_text", text="hi", index=2)],
+      [_act("click", index=1), _act("input_text", text="yo", index=2)],
+    ]
+    for t in traj:
+      t[0].element = _mk("Trash")
+      t[1].element = _mk("Subject")
+    skills = mine_skills(
+        traj,
+        goal_hints=["Create a note"] * 2,
+        preconditions=["Markor main"] * 2,
+        kind="negative",
+    )
+    self.assertEqual(len(skills), 1)
+    self.assertEqual(skills[0].kind, "negative")
+    self.assertEqual(skills[0].goal_hint, "Create a note")
+
 
 class GoalAbstractionTest(unittest.TestCase):
 
@@ -196,6 +216,33 @@ class SkillLibraryTest(unittest.TestCase):
     self.assertEqual(len(lib.all()), 1)  # dedup by goal_hint
     self.assertEqual(lib.get("Open Markor").goal_hint, "Open Markor")
     self.assertEqual(sid2, lib._skill_id("Open Markor"))
+
+  def test_positive_and_negative_same_goal_coexist(self):
+    """A positive and a negative skill for the same goal must NOT overwrite
+    each other — they are distinct memories keyed by (goal_hint, kind)."""
+    lib = SkillLibrary()
+    lib.add_skill(Skill(goal_hint="Create a note",
+                        actions=[SkillAction("click", target="Compose")],
+                        kind="positive"))
+    lib.add_skill(Skill(goal_hint="Create a note",
+                        actions=[SkillAction("long_press", target="Trash")],
+                        kind="negative"))
+    self.assertEqual(len(lib.all()), 2)
+    self.assertIsNotNone(lib.get("Create a note", "positive"))
+    self.assertIsNotNone(lib.get("Create a note", "negative"))
+
+  def test_kind_roundtrip_through_persistence(self):
+    with tempfile.TemporaryDirectory() as d:
+      lib = SkillLibrary(persist_dir=d)
+      lib.add_skill(Skill(goal_hint="Create a note",
+                          actions=[SkillAction("click", target="Compose")],
+                          kind="negative"))
+      lib.save()
+      lib2 = SkillLibrary(persist_dir=d)
+      neg = lib2.get("Create a note", "negative")
+      self.assertIsNotNone(neg)
+      self.assertEqual(neg.kind, "negative")
+      self.assertIsNone(lib2.get("Create a note", "positive"))
 
   def test_instantiate_binds_slots(self):
     sk = Skill(

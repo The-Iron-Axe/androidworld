@@ -202,6 +202,7 @@ def _skill_from_token_list(
     goal_hint: str,
     precondition: str,
     slots: list[str],
+    kind: str = "positive",
 ) -> Skill:
     """Materialize a flat leaf-token list into a parameterized Skill.
 
@@ -215,6 +216,7 @@ def _skill_from_token_list(
         actions=actions,
         slots=slots,
         score=1.0,
+        kind=kind,
     )
 
 
@@ -277,6 +279,7 @@ def mine_skills(
     preconditions: list[str],
     min_freq: int = 2,
     max_iters: int = 8,
+    kind: str = "positive",
 ) -> list[Skill]:
     """Top-level abstraction entry: trajectories -> candidate skills.
 
@@ -288,6 +291,10 @@ def mine_skills(
       preconditions: one starting-screen precondition per trajectory.
       min_freq:     minimum total occurrences of a token pair to merge (BPE).
       max_iters:    maximum BPE merge iterations.
+      kind:         "positive" for skills mined from successful trajectories,
+                    "negative" for avoidance skills mined from failed ones.
+                    Only the skill's label changes — the abstraction pipeline
+                    (slot extraction + BPE) is identical for both.
 
     Returns candidate Skill objects (not yet validated/committed).  The first
     trajectory's goal_hint/precondition seed the skill; cross-trajectory
@@ -307,5 +314,6 @@ def mine_skills(
             goal_hint=_abstract_goal_hint(goal_hints[0]),
             precondition=preconditions[0] if preconditions else "",
             slots=list(slots.values()),
+            kind=kind,
         )
     ]

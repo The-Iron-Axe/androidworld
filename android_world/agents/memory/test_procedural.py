@@ -44,6 +44,64 @@ class ProceduralMemoryTest(unittest.TestCase):
     self.assertEqual(added, 0)
     self.assertEqual(mem.size, 0)
 
+  def test_failed_trajectory_mines_negative_skill(self):
+    """Failed trajectories buffer and mine into negative 'avoid' skills."""
+    mem = self._make_memory()
+    traj = [
+      _act("open_app", app_name="markor"),
+      _act("long_press", index=1),
+      _act("click", index=2),
+    ]
+    mem.add_failed_trajectory("Create a note", traj, precondition="Markor main screen")
+    added = mem.mine()
+    self.assertGreaterEqual(added, 1)
+    self.assertEqual(mem.stats()["positive"], 0)
+    self.assertGreaterEqual(mem.stats()["negative"], 1)
+
+  def test_positive_and_negative_retrieved_together(self):
+    """Both a positive and a negative skill for the same goal are retrieved —
+    the prompt carries "how to do it" AND "what to avoid" simultaneously."""
+    mem = self._make_memory()
+    # Only a negative skill -> hint carries [Avoid].
+    mem.add_failed_trajectory(
+        "Create a note",
+        [_act("open_app", app_name="markor"), _act("long_press", index=1)],
+        precondition="Markor main screen",
+    )
+    mem.mine()
+    neg_hint = mem.retrieve_hint("Create a note", precondition="Markor main screen")
+    self.assertIn("[Avoid]", neg_hint)
+    self.assertNotIn("[Skill]", neg_hint)
+
+    # Add a positive skill for the same goal -> now BOTH appear.
+    mem.add_successful_trajectory(
+        "Create a note",
+        [_act("open_app", app_name="markor"), _act("click", index=1)],
+        precondition="Markor main screen",
+    )
+    mem.mine()
+    both = mem.retrieve_hint("Create a note", precondition="Markor main screen")
+    self.assertIn("[Skill]", both)
+    self.assertIn("[Avoid]", both)
+
+  def test_retrieve_blocks_separates_kinds(self):
+    """retrieve_blocks returns positive and negative as independent keys."""
+    mem = self._make_memory()
+    mem.add_successful_trajectory(
+        "Create a note",
+        [_act("open_app", app_name="markor"), _act("click", index=1)],
+        precondition="Markor main screen",
+    )
+    mem.add_failed_trajectory(
+        "Create a note",
+        [_act("open_app", app_name="markor"), _act("long_press", index=1)],
+        precondition="Markor main screen",
+    )
+    mem.mine()
+    blocks = mem.retrieve_blocks("Create a note", precondition="Markor main screen")
+    self.assertIn("[Skill]", blocks["positive"])
+    self.assertIn("[Avoid]", blocks["negative"])
+
   def test_retrieve_hint_hit_and_miss(self):
     mem = self._make_memory()
     mem.library.add_skill(Skill(
@@ -76,6 +134,20 @@ class ProceduralMemoryTest(unittest.TestCase):
     mem.record_outcome("Create a new note", success=False)
     self.assertEqual(mem.size, 0)
 
+  def test_record_outcome_evicts_negative_skill(self):
+    """A negative skill that gets followed and still fails is penalized too."""
+    mem = self._make_memory()
+    mem.add_failed_trajectory(
+        "Create a note",
+        [_act("open_app", app_name="markor"), _act("long_press", index=1)],
+        precondition="Markor main screen",
+    )
+    mem.mine()
+    self.assertGreaterEqual(mem.stats()["negative"], 1)
+    # score starts at 1.0; one failure -> 0 -> evict.
+    mem.record_outcome("Create a note", success=False)
+    self.assertEqual(mem.stats()["negative"], 0)
+
   def test_persistence_roundtrip(self):
     with tempfile.TemporaryDirectory() as d:
       mem = self._make_memory(d)
@@ -96,7 +168,10 @@ class ProceduralMemoryTest(unittest.TestCase):
     mem = self._make_memory()
     st = mem.stats()
     self.assertEqual(st["skills"], 0)
+    self.assertEqual(st["positive"], 0)
+    self.assertEqual(st["negative"], 0)
     self.assertEqual(st["buffered"], 0)
+    self.assertEqual(st["failed_buffered"], 0)
 
 
 if __name__ == "__main__":

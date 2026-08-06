@@ -44,7 +44,14 @@ class SkillAction:
 
 @dataclass
 class Skill:
-    """A reusable procedural skill."""
+    """A reusable procedural skill.
+
+    `kind` distinguishes positive skills ("do it this way", mined from
+    successful trajectories) from negative skills ("avoid this", mined from
+    failed trajectories).  They share the same retrieval keys and are kept in
+    the same library, but a negative skill is injected as an avoidance hint
+    instead of an instruction.
+    """
     goal_hint: str
     precondition: str = ""
     actions: list[SkillAction] = field(default_factory=list)
@@ -53,6 +60,7 @@ class Skill:
     successes: int = 0
     failures: int = 0
     version: int = 1
+    kind: str = "positive"
 
     @property
     def capacity(self) -> int:
@@ -110,26 +118,31 @@ class SkillLibrary:
         import os
         return os.path.join(self.persist_dir, "u4_skills.json")
 
-    def _skill_id(self, goal_hint: str) -> str:
-        return self._hash(goal_hint.encode("utf-8")).hexdigest()[:12]
+    def _skill_id(self, goal_hint: str, kind: str = "positive") -> str:
+        """Stable id keyed by (goal_hint, kind).
+
+        A positive and a negative skill for the same goal must NOT share an id
+        (they are distinct memories), so `kind` is part of the hash.
+        """
+        return self._hash(f"{kind}:{goal_hint}".encode("utf-8")).hexdigest()[:12]
 
     # ── CRUD ────────────────────────────────────────────────────────
 
     def add_skill(self, skill: Skill) -> str:
-        """Insert or update a skill, keyed by sha1(goal_hint).  Returns id."""
+        """Insert or update a skill, keyed by sha1(kind:goal_hint).  Returns id."""
         import os
-        sid = self._skill_id(skill.goal_hint)
+        sid = self._skill_id(skill.goal_hint, skill.kind)
         self._skills[sid] = skill
         if self.persist_dir:
             os.makedirs(self.persist_dir, exist_ok=True)
             self.save()
         return sid
 
-    def get(self, goal_hint: str) -> Skill | None:
-        return self._skills.get(self._skill_id(goal_hint))
+    def get(self, goal_hint: str, kind: str = "positive") -> Skill | None:
+        return self._skills.get(self._skill_id(goal_hint, kind))
 
-    def remove(self, goal_hint: str) -> bool:
-        sid = self._skill_id(goal_hint)
+    def remove(self, goal_hint: str, kind: str = "positive") -> bool:
+        sid = self._skill_id(goal_hint, kind)
         if sid in self._skills:
             del self._skills[sid]
             self.save()
@@ -162,6 +175,7 @@ class SkillLibrary:
                     "successes": s.successes,
                     "failures": s.failures,
                     "version": s.version,
+                    "kind": s.kind,
                 }
                 for s in self._skills.values()
             ],
@@ -175,7 +189,8 @@ class SkillLibrary:
         with open(path, "r", encoding="utf-8") as f:
             state = json.load(f)
         for sd in state.get("skills", []):
-            sid = self._skill_id(sd["goal_hint"])
+            kind = sd.get("kind", "positive")
+            sid = self._skill_id(sd["goal_hint"], kind)
             self._skills[sid] = Skill(
                 goal_hint=sd["goal_hint"],
                 precondition=sd.get("precondition", ""),
@@ -187,4 +202,5 @@ class SkillLibrary:
                 successes=sd.get("successes", 0),
                 failures=sd.get("failures", 0),
                 version=sd.get("version", 1),
+                kind=kind,
             )

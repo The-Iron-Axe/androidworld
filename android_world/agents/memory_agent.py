@@ -216,9 +216,12 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       app = self.u1.current_app if self.u1 is not None else ""
       page = self.u1.current_page if self.u1 is not None else ""
       retrieve_goal = getattr(self, "_current_goal", "") or goal
-      u4_text = self.u4.retrieve_hint(retrieve_goal, precondition=page)
-      if u4_text:
-        memory_blocks.append(f"## Procedural Skill (U4)\n{u4_text}")
+      blocks = self.u4.retrieve_blocks(retrieve_goal, precondition=page)
+      if blocks["positive"]:
+        memory_blocks.append(f"## Procedural Skill (U4)\n{blocks['positive']}")
+      if blocks["negative"]:
+        # Negative skills are avoidance guidance — "don't do it this way".
+        memory_blocks.append(f"## Avoid (U4)\n{blocks['negative']}")
 
     # Prepend memory blocks to the goal so they appear before the history
     # in the parent's prompt template.  This avoids any format-string issues
@@ -436,7 +439,18 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       # successful episode, since mining is cheap and deterministic).
       self.u4.mine()
     else:
+      # Failure experience is valuable too: score-penalize any pre-existing
+      # skill that matched this episode FIRST, then buffer the failed
+      # trajectory for negative-skill mining.  Ordering matters — mining must
+      # not run before record_outcome, or a freshly mined negative skill
+      # (score=1.0) would be immediately penalized down to 0 and evicted,
+      # never surviving long enough to be retrieved.
       self.u4.record_outcome(goal, success=False)
+      first_elements = self.history[0].get("before_ui_elements", []) if self.history else []
+      first_app, first_page = extract_app_from_elements(first_elements)
+      precondition = first_page or first_app
+      self.u4.add_failed_trajectory(goal, actions, precondition=precondition)
+      self.u4.mine()
 
   # ── U2 deterministic replay (§3.2.2) ──────────────────────────────
 

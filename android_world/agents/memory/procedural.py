@@ -6,13 +6,18 @@ API aligned with U1/U2/U3 so the agent wires it identically.
 
 Lifecycle:
   write:  add_successful_trajectory(goal, actions, precondition) buffers the
-          trajectory; mine() abstracts the buffered successes into candidate
-          skills (BPE + slot abstraction) and commits them.  Optionally
-          validate_skills() replays a subset against a real verifier before
-          commit (SkillWeaver-style testing) — see validation docs.
+          trajectory; add_failed_trajectory() buffers failed ones.  mine()
+          abstracts the buffered successes into candidate positive skills AND
+          the buffered failures into negative "avoid" skills (BPE + slot
+          abstraction) and commits them.  Optionally validate_skills() replays
+          a subset against a real verifier before commit (SkillWeaver-style
+          testing) — see validation docs.
   read:   retrieve_hint(goal, precondition) returns a compact prompt hint.
-  update: record_outcome(success) adjusts the matched skill's score; evicts
-          when score <= 0 (ProcMEM gain-based pruning).
+          Positive skills ("do this") are returned first; a negative
+          ("avoid this") hint is returned only when no positive skill matches,
+          so the two never contradict each other in one prompt.
+  update: record_outcome(success) adjusts the matched skill's score (of either
+          kind); evicts when score <= 0 (ProcMEM gain-based pruning).
 """
 
 from __future__ import annotations
@@ -38,6 +43,8 @@ class ProceduralMemory:
     self.max_iters = max_iters
     # Buffered successful trajectories awaiting the next mine().
     self._buffer: list[tuple[str, list, str]] = []  # (goal, actions, precondition)
+    # Buffered FAILED trajectories — mined into negative "avoid" skills.
+    self._failed_buffer: list[tuple[str, list, str]] = []
     self._last_mined: int = 0
 
   # ── Writing: buffer + mine ─────────────────────────────────────────
@@ -59,18 +66,57 @@ class ProceduralMemory:
       return
     self._buffer.append((goal, acts, precondition))
 
-  def mine(self) -> int:
-    """Abstract buffered successful trajectories into skills; commit them.
+  def add_failed_trajectory(
+      self,
+      goal: str,
+      actions: list,
+      precondition: str = "",
+  ) -> None:
+    """Buffer one FAILED trajectory for negative-skill mining.
 
-    Returns the number of new skills added.  Candidate skills are committed
-    only when they clear a structural sanity check (non-empty procedure).
-    Retrieval scoring is delegated to SkillLibrary.
+    Failed trajectories are mined into negative "avoid" skills — reusable
+    knowledge of what NOT to do — instead of being discarded.  This is the
+    U4 channel through which failure experience reaches the decision loop.
+    Trajectories with 1 action or fewer are skipped (atomic, mirroring the
+    positive-skill filter).
     """
-    if not self._buffer:
+    acts = [a for a in actions if a is not None]
+    if len(acts) <= 1:
+      return
+    self._failed_buffer.append((goal, acts, precondition))
+
+  def mine(self) -> int:
+    """Abstract buffered trajectories into skills; commit them.
+
+    Successful trajectories become positive skills; failed ones become
+    negative "avoid" skills (kind="negative").  Returns the number of new
+    skills added (both kinds).  Candidate skills are committed only when they
+    clear a structural sanity check (non-empty procedure).  Retrieval scoring
+    is delegated to SkillLibrary.
+    """
+    added = 0
+    if self._buffer:
+      added += self._mine_batch(
+          self._buffer, kind="positive", clear=True
+      )
+    if self._failed_buffer:
+      added += self._mine_batch(
+          self._failed_buffer, kind="negative", clear=True
+      )
+    return added
+
+  def _mine_batch(
+      self,
+      buffer: list[tuple[str, list, str]],
+      kind: str,
+      clear: bool,
+  ) -> int:
+    """Mine one buffer batch (positive or negative) and commit the skills."""
+    if not buffer:
       return 0
-    trajectories = [acts for _, acts, _ in self._buffer]
-    goal_hints = [g for g, _, _ in self._buffer]
-    preconditions = [p for _, _, p in self._buffer]
+    trajectories = [acts for _, acts, _ in buffer]
+    goal_hints = [g for g, _, _ in buffer]
+    preconditions = [p for _, _, p in buffer]
 
     candidates = mine_skills(
         trajectories,
@@ -78,6 +124,7 @@ class ProceduralMemory:
         preconditions,
         min_freq=self.min_freq,
         max_iters=self.max_iters,
+        kind=kind,
     )
     added = 0
     for sk in candidates:
@@ -85,8 +132,9 @@ class ProceduralMemory:
         continue
       self.library.add_skill(sk)
       added += 1
-    self._last_mined = len(self._buffer)
-    self._buffer.clear()
+    self._last_mined = len(buffer)
+    if clear:
+      buffer.clear()
     return added
 
   # ── Retrieval ──────────────────────────────────────────────────────
@@ -106,6 +154,15 @@ class ProceduralMemory:
     pre_sim = 1.0 if p == ph else (0.5 if not p or not ph else _token_overlap(p, ph))
     return goal_sim * pre_sim
 
+  def _top_skills(self, goal: str, precondition: str, kind: str) -> list[Skill]:
+    """Best-matching skills of one kind, sorted by score desc."""
+    skills = [s for s in self.library.all() if s.kind == kind]
+    if not skills:
+      return []
+    scored = [(self._score_skill(s, goal, precondition), s) for s in skills]
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [s for sc, s in scored if sc > 0.0]
+
   def retrieve_hint(
       self,
       goal: str,
@@ -114,22 +171,50 @@ class ProceduralMemory:
   ) -> str:
     """Return a compact U4 skill hint for prompt injection, or "" on miss.
 
-    Skills are scored by dual-factor similarity (goal_hint + precondition)
-    mirroring U2's Plan(precondition, goal).  Returns at most k hints (default
-    1, per ReasoningBank's k=1 finding).  Format is action-type summary with
-    parameterized targets, stable across re-indexing.
+    Positive AND negative skills are retrieved together: a positive skill says
+    "do it this way", a negative skill says "avoid this".  They are returned
+    as separate sections so the prompt carries both what worked and what
+    failed — failure experience is usable knowledge, not a fallback that is
+    masked whenever a success exists.
     """
-    skills = self.library.all()
-    if not skills:
-      return ""
-    scored = [(self._score_skill(s, goal, precondition), s) for s in skills]
-    scored.sort(key=lambda t: t[0], reverse=True)
-    hits = [s for sc, s in scored if sc > 0.0][:k]
-    if not hits:
-      return ""
+    blocks = self.retrieve_blocks(goal, precondition, k)
+    return " | ".join(v for v in blocks.values() if v)
+
+  def retrieve_blocks(
+      self,
+      goal: str,
+      precondition: str = "",
+      k: int = 1,
+  ) -> dict[str, str]:
+    """Retrieve positive and negative skill hints separately.
+
+    Returns {"positive": ..., "negative": ...} — each either a formatted hint
+    or "" when no skill of that kind matches.  The agent injects them as two
+    independent prompt blocks so both "how to do it" and "what to avoid"
+    reach the LLM at once.
+    """
+    positive = self._top_skills(goal, precondition, "positive")
+    negative = self._top_skills(goal, precondition, "negative")
+    return {
+        "positive": (
+            self._format_skills(positive[:k], negative=False) if positive else ""
+        ),
+        "negative": (
+            self._format_skills(negative[:k], negative=True) if negative else ""
+        ),
+    }
+
+  @staticmethod
+  def _format_skills(skills: list[Skill], negative: bool) -> str:
+    """Render matched skills as prompt text.
+
+    Positive:  "[Skill] <goal_hint>: <action types>"
+    Negative:  "[Avoid] <goal_hint>: <action types>"  (what NOT to do)
+    """
     parts = []
-    for s in hits:
-      parts.append(f"[Skill] {s.goal_hint}: " + s.action_types())
+    for s in skills:
+      tag = "[Avoid]" if negative else "[Skill]"
+      parts.append(f"{tag} {s.goal_hint}: " + s.action_types())
     return " | ".join(parts)
 
   # ── Update: outcome feedback ───────────────────────────────────────
@@ -142,7 +227,9 @@ class ProceduralMemory:
     """Update the best-matching skill's score from a real execution outcome.
 
     On success: score += 1; on failure: score -= 1.  Evict a skill whose
-    score drops to <= 0 (ProcMEM gain-based pruning).
+    score drops to <= 0 (ProcMEM gain-based pruning).  The best-matching
+    skill of EITHER kind is updated — a negative skill that gets followed
+    and still fails should be penalized just like a positive one.
     """
     skills = self.library.all()
     if not skills:
@@ -159,7 +246,7 @@ class ProceduralMemory:
       best.failures += 1
       best.score -= 1.0
     if best.score <= 0.0:
-      self.library.remove(best.goal_hint)
+      self.library.remove(best.goal_hint, best.kind)
     else:
       self.library.add_skill(best)  # persist updated score
 
@@ -176,7 +263,10 @@ class ProceduralMemory:
     skills = self.library.all()
     return {
         "skills": len(skills),
+        "positive": sum(1 for s in skills if s.kind == "positive"),
+        "negative": sum(1 for s in skills if s.kind == "negative"),
         "buffered": len(self._buffer),
+        "failed_buffered": len(self._failed_buffer),
         "last_mined": self._last_mined,
         "total_successes": sum(s.successes for s in skills),
         "total_failures": sum(s.failures for s in skills),
