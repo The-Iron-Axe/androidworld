@@ -36,6 +36,7 @@ from android_world.agents import human_agent
 from android_world.agents import infer
 from android_world.agents import m3a
 from android_world.agents import memory_agent
+from android_world.agents import multi_agent
 from android_world.agents import random_agent
 from android_world.agents import seeact
 from android_world.agents import t3a
@@ -185,6 +186,14 @@ _RAG_URL = flags.DEFINE_string(
     'U3 RAG service URL. Empty = use env RAG_URL or http://127.0.0.1:18180.',
 )
 
+_MULTIAGENT = flags.DEFINE_boolean(
+    'multiagent',
+    False,
+    'Enable the multi-agent orchestration layer (Planner/Executor/Reflector).'
+    ' Orthogonal to the U1-U4 memory flags; when off the agent behaves exactly'
+    ' like the existing memory-augmented agent.',
+)
+
 _SCREENSHOT_SCALE = flags.DEFINE_float(
     'screenshot_scale',
     1.0,
@@ -260,19 +269,35 @@ def _get_agent(
     )
   # Memory-augmented agent with orthogonal U1/U2/U3 flags.
   elif _AGENT_NAME.value == 'm3a_qwen3_vl_32b_mem':
-    agent = memory_agent.MemoryAugmentedAgent(
-        env,
-        infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
-        enable_u1=_U1.value,
-        enable_u2=_U2.value,
-        enable_u3=_U3.value,
-        enable_u4=_U4.value,
-        u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
-        u3_persistence_dir=_U3_PERSISTENCE_DIR.value,
-        u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
-        rag_url=_RAG_URL.value or None,
-        screenshot_scale=_SCREENSHOT_SCALE.value,
-    )
+    if _MULTIAGENT.value:
+      agent = multi_agent.MultiAgentReflectorAgent(
+          env,
+          infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+          enable_multiagent=True,
+          enable_u1=_U1.value,
+          enable_u2=_U2.value,
+          enable_u3=_U3.value,
+          enable_u4=_U4.value,
+          u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
+          u3_persistence_dir=_U3_PERSISTENCE_DIR.value,
+          u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
+          rag_url=_RAG_URL.value or None,
+          screenshot_scale=_SCREENSHOT_SCALE.value,
+      )
+    else:
+      agent = memory_agent.MemoryAugmentedAgent(
+          env,
+          infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+          enable_u1=_U1.value,
+          enable_u2=_U2.value,
+          enable_u3=_U3.value,
+          enable_u4=_U4.value,
+          u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
+          u3_persistence_dir=_U3_PERSISTENCE_DIR.value,
+          u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
+          rag_url=_RAG_URL.value or None,
+          screenshot_scale=_SCREENSHOT_SCALE.value,
+      )
   # SeeAct.
   elif _AGENT_NAME.value == 'seeact':
     agent = seeact.SeeAct(env)

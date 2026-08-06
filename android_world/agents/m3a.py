@@ -16,6 +16,8 @@
 
 import time
 
+import cv2
+import numpy as np
 from absl import logging
 from android_world.agents import agent_utils
 from android_world.agents import base_agent
@@ -268,6 +270,26 @@ def _generate_ui_elements_description_list(
   return tree_info
 
 
+_SCREENSHOT_SCALE_FACTOR = 0.75
+
+
+def _downscale_screenshot(screenshot: np.ndarray) -> np.ndarray:
+  """Downscale the screenshot for cheaper vision-model upload and prefill.
+
+  The SOM bounding boxes are drawn relative to the current screenshot size
+  (add_ui_element_mark scales by screenshot.shape / physical_frame_boundary),
+  so any aspect-preserving downscale keeps the marks aligned.
+  """
+  if _SCREENSHOT_SCALE_FACTOR == 1.0:
+    return screenshot
+  height, width = screenshot.shape[:2]
+  return cv2.resize(
+      screenshot,
+      (int(width * _SCREENSHOT_SCALE_FACTOR), int(height * _SCREENSHOT_SCALE_FACTOR)),
+      interpolation=cv2.INTER_AREA,
+  )
+
+
 def _action_selection_prompt(
     goal: str,
     history: list[str],
@@ -431,8 +453,8 @@ class M3A(base_agent.EnvironmentInteractingAgent):
         before_ui_elements, logical_screen_size
     )
     step_data['before_ui_elements_list'] = before_ui_elements_list
-    step_data['raw_screenshot'] = state.pixels.copy()  # pyrefly: ignore[bad-assignment]
-    before_screenshot = state.pixels.copy()
+    step_data['raw_screenshot'] = _downscale_screenshot(state.pixels.copy())  # pyrefly: ignore[bad-assignment]
+    before_screenshot = _downscale_screenshot(state.pixels.copy())
     for index, ui_element in enumerate(before_ui_elements):
       if m3a_utils.validate_ui_element(ui_element, logical_screen_size):
         m3a_utils.add_ui_element_mark(
@@ -442,6 +464,7 @@ class M3A(base_agent.EnvironmentInteractingAgent):
             logical_screen_size,
             physical_frame_boundary,
             orientation,
+            mark_scale=1.0 / _SCREENSHOT_SCALE_FACTOR,
         )
     step_data['before_screenshot_with_som'] = before_screenshot.copy()  # pyrefly: ignore[bad-assignment]
 
@@ -548,6 +571,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
           logical_screen_size,
           physical_frame_boundary,
           orientation,
+          mark_scale=1.0 / _SCREENSHOT_SCALE_FACTOR,
       )
 
     if converted_action.action_type == 'status':
@@ -592,7 +616,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
     )
     step_data['after_ui_elements'] = after_ui_elements
     step_data['after_ui_elements_list'] = after_ui_elements_list
-    after_screenshot = state.pixels.copy()
+    after_screenshot = _downscale_screenshot(state.pixels.copy())
     for index, ui_element in enumerate(after_ui_elements):
       if m3a_utils.validate_ui_element(ui_element, logical_screen_size):
         m3a_utils.add_ui_element_mark(
@@ -602,6 +626,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
             logical_screen_size,
             physical_frame_boundary,
             orientation,
+            mark_scale=1.0 / _SCREENSHOT_SCALE_FACTOR,
         )
 
     m3a_utils.add_screenshot_label(

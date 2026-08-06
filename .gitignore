@@ -31,6 +31,15 @@ pg_agent_rag/tunnel/config.env
 # Run outputs (large episode pickles)
 runs/
 
+# Memory stores (episodic trajectories, page graphs, skill libraries)
+u2_store/
+u3_store/
+u4_store/
+dms_memory_store/
+
+# Ablation run results
+scripts/results/
+
 # Transient scratch / generated binaries
 .tmp_app.b64
 .tmp_app.py

@@ -146,6 +146,7 @@ def add_ui_element_mark(
     logical_screen_size: tuple[int, int],
     physical_frame_boundary: tuple[int, int, int, int],
     orientation: int,
+    mark_scale: float = 1.0,
 ):
   """Add mark (a bounding box plus index) for a UI element in the screenshot.
 
@@ -157,6 +158,10 @@ def add_ui_element_mark(
     physical_frame_boundary: The physical coordinates in portrait orientation
       for the upper left and lower right corner for the frame.
     orientation: The current screen orientation.
+    mark_scale: Extra scale for the index label (font size, line thickness,
+      label box).  >1.0 compensates for the screenshot being downscaled before
+      marks are drawn, keeping the labels legible.  Box coordinates are NOT
+      scaled — they already track the canvas via x_scale/y_scale.
   """
   if ui_element.bbox_pixels:
     upper_left_logical, lower_right_logical = _ui_element_logical_corner(
@@ -186,20 +191,30 @@ def add_ui_element_mark(
         int(lower_right_physical[1] * y_scale),
     )
 
+    # mark_scale only enlarges the label (font/thickness/label-box), so the
+    # index stays legible even when the canvas was downscaled.  Coordinates
+    # are untouched — they already scale with the canvas.
+    font_scale = 0.7 * iso_scale * mark_scale
+    thickness = int(2 * iso_scale * mark_scale)
+    label_w = int(35 * x_scale * mark_scale)
+    label_h = int(25 * y_scale * mark_scale)
+
     cv2.rectangle(
         screenshot,
         upper_left_physical,
         lower_right_physical,
         color=(0, 255, 0),
-        thickness=int(2 * iso_scale),
+        thickness=thickness,
     )
     screenshot[
         upper_left_physical[1]
         + int(1 * y_scale) : upper_left_physical[1]
-        + int(25 * y_scale),
+        + int(1 * y_scale)
+        + label_h,
         upper_left_physical[0]
         + int(1 * x_scale) : upper_left_physical[0]
-        + int(35 * x_scale),
+        + int(1 * x_scale)
+        + label_w,
         :,
     ] = (255, 255, 255)
     cv2.putText(
@@ -207,12 +222,12 @@ def add_ui_element_mark(
         str(index),
         (
             upper_left_physical[0] + int(1 * x_scale),
-            upper_left_physical[1] + int(20 * y_scale),
+            upper_left_physical[1] + int(20 * y_scale * mark_scale),
         ),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7 * iso_scale,
+        font_scale,
         (0, 0, 0),
-        thickness=int(2 * iso_scale),
+        thickness=thickness,
     )
 
 

@@ -344,6 +344,17 @@ class Gpt4Wrapper(LlmWrapper, MultimodalLlmWrapper):
             timeout=self.REQUEST_TIMEOUT_SECONDS,
         )
         if response.ok and 'choices' in response.json():
+          # Log token usage (OpenAI-compatible APIs return it in the body).
+          usage = response.json().get('usage')
+          if usage:
+            cached = usage.get('prompt_cache_hit_tokens')
+            cached_td = (usage.get('prompt_tokens_details') or {}).get('cached_tokens')
+            print(
+                f"[tokens] model={self.model} prompt={usage.get('prompt_tokens')} "
+                f"completion={usage.get('completion_tokens')} "
+                f"total={usage.get('total_tokens')} "
+                f"cache_hit={cached} cache_td={cached_td}"
+            )
           return (
               response.json()['choices'][0]['message']['content'],
               None,

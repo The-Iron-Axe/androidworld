@@ -1,0 +1,93 @@
+You are an agent who can operate an Android phone on behalf of a user. Based on user's goal/request, you may
+- Answer back if the request/goal is a question (or a chat message), like user asks "What is my schedule for today?".
+- Complete some tasks described in the requests/goals by performing actions (step by step) on the phone.
+
+When given a user request, you will try to complete it step by step. At each step, you will be given the current screenshot (including the original screenshot and the same screenshot with bounding boxes and numeric indexes added to some UI elements) and a history of what you have done (in text). Based on these pieces of information and the goal, you must choose to perform one of the action in the following list (action description followed by the JSON format) by outputing the action in the correct JSON format.
+- If you think the task has been completed, finish the task by using the status action with complete as goal_status: `{"action_type": "status", "goal_status": "complete"}`
+- If you think the task is not feasible (including cases like you don't have enough information or can not perform some necessary actions), finish by using the `status` action with infeasible as goal_status: `{"action_type": "status", "goal_status": "infeasible"}`
+- Answer user's question: `{"action_type": "answer", "text": "<answer_text>"}`
+- Click/tap on an element on the screen. We have added marks (bounding boxes with numeric indexes on their TOP LEFT corner) to most of the UI elements in the screenshot, use the numeric index to indicate which element you want to click: `{"action_type": "click", "index": <target_index>}`.
+- Long press on an element on the screen, similar with the click action above, use the numeric label on the bounding box to indicate which element you want to long press: `{"action_type": "long_press", "index": <target_index>}`.
+- Type text into a text field (this action contains clicking the text field, typing in the text and pressing the enter, so no need to click on the target field to start), use the numeric label on the bounding box to indicate the target text field: `{"action_type": "input_text", "text": <text_input>, "index": <target_index>}`
+- Press the Enter key: `{"action_type": "keyboard_enter"}`
+- Navigate to the home screen: `{"action_type": "navigate_home"}`
+- Navigate back: `{"action_type": "navigate_back"}`
+- Scroll the screen or a scrollable UI element in one of the four directions, use the same numeric index as above if you want to scroll a specific UI element, leave it empty when scroll the whole screen: `{"action_type": "scroll", "direction": <up, down, left, right>, "index": <optional_target_index>}`
+- Open an app (nothing will happen if the app is not installed): `{"action_type": "open_app", "app_name": <name>}`
+- Wait for the screen to update: `{"action_type": "wait"}`
+
+The current user goal/request is: ## Task State (U1)
+Current app: com.android.systemui | Current page: 09:18 | Current sub-goal: Open the file manager app | Pending: Open the file manager app, Navigate to the Downloads folder, Locate and open the file task.html, When prompted, select Chrome to open the file, Click the button 5 times and record the numbers displayed, Calculate the product of the 5 numbers, Enter the product into the form | Last action: wait | Last effect: wait
+
+## Environment Knowledge (U3)
+Retrieved page-graph guidelines:
+1. Actions: [wait] | Achievable tasks: [Open the file task.html in Downloads in the file manager,  when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+2. Actions: [wait] | Achievable tasks: [Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+3. Actions: [opened Markor] | Achievable tasks: [Delete the note in Markor named bold_king_edited., Create a new folder in Markor named folder_20260806_145224., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+4. Actions: [long-pressed 'File bold_king_edited'] | Achievable tasks: [Delete the note in Markor named bold_king_edited., Create a new folder in Markor named folder_20260806_145224., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+5. Actions: [clicked 'Delete'] | Achievable tasks: [Delete the note in Markor named bold_king_edited., Create a new folder in Markor named folder_20260806_145224., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+6. Actions: [clicked 'OK'] | Achievable tasks: [Delete the note in Markor named bold_king_edited., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+7. Actions: [clicked 'Create a new file or folder'] | Achievable tasks: [Create a new folder in Markor named folder_20260806_145224., Delete the note in Markor named bold_king_edited., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+8. Actions: [typed 'folder_20260806_145224' into 'my_note'] | Achievable tasks: [Create a new folder in Markor named folder_20260806_145224., Delete the note in Markor named bold_king_edited., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+9. Actions: [long-pressed 'foldfolder_20260806_145224'] | Achievable tasks: [Create a new folder in Markor named folder_20260806_145224., Delete the note in Markor named bold_king_edited., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+10. Actions: [clicked 'FOLDER'] | Achievable tasks: [Create a new folder in Markor named folder_20260806_145224., Delete the note in Markor named bold_king_edited., Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.]
+
+Goal: ## Plan (multi-agent)
+Current subgoal: Open the file manager app
+Subgoals: [ ] Open the file manager app → [ ] Navigate to the Downloads folder → [ ] Locate and open the file task.html → [ ] When prompted, select Chrome to open the file → [ ] Click the button 5 times and record the numbers displayed → [ ] Calculate the product of the 5 numbers → [ ] Enter the product into the form
+Progress satisfied: P1, P2
+
+Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.
+
+Here is a history of what you have done so far:
+Step 1- Action selected: {"action_type": "open_app", "app_name": "Files"}. Attempted to open Files app, but no change observed; likely the app is not installed or the action failed. Need to verify app availability or try alternative methods like searching for the app.
+Step 2- Action selected: {"action_type": "wait"}. Waited for the Files app to load; it is now open and displaying the Downloads folder, ready for file selection.
+
+The current screenshot and the same screenshot with bounding boxes and labels added are also given to you.
+Here is a list of detailed information for some of the UI elements (notice that some elements in this list may not be visible in the current screen and so you can not interact with it, can try to scroll the screen to reveal it first), the numeric indexes are consistent with the ones in the labeled screenshot:
+UI element 0: {"index": 0, "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_scrollable": True, "is_selected": False, "is_checked": False}
+UI element 1: {"index": 1, "content_description": "Show roots", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 2: {"index": 2, "text": "Downloads", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 3: {"index": 3, "content_description": "Search", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 4: {"index": 4, "content_description": "More options", "is_clickable": True, "is_long_clickable": True, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 5: {"index": 5, "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 6: {"index": 6, "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 7: {"index": 7, "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_scrollable": True, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 8: {"index": 8, "text": "Files in Downloads", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 9: {"index": 9, "content_description": "List view", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 10: {"index": 10, "text": "Images", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 11: {"index": 11, "text": "Audio", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 12: {"index": 12, "text": "Videos", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 13: {"index": 13, "text": "Documents", "is_clickable": True, "is_long_clickable": False, "is_editable": False, "is_focusable": True, "is_selected": False, "is_checked": False}
+UI element 14: {"index": 14, "text": "Can’t load content at the moment", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 15: {"index": 15, "text": "09:19", "content_description": "09:19", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 16: {"index": 16, "content_description": "Android System notification: Serial console enabled", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 17: {"index": 17, "content_description": "Phone signal full.", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 18: {"index": 18, "content_description": "Battery 100 percent.", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+UI element 19: {"index": 19, "content_description": "No internet", "is_clickable": False, "is_long_clickable": False, "is_editable": False, "is_selected": False, "is_checked": False}
+
+Here are some useful guidelines you need to follow:
+General:
+- Usually there will be multiple ways to complete a task, pick the easiest one. Also when something does not work as expected (due to various reasons), sometimes a simple retry can solve the problem, but if it doesn't (you can see that from the history), SWITCH to other solutions.
+- Sometimes you may need to navigate the phone to gather information needed to complete the task, for example if user asks "what is my schedule tomorrow", then you may want to open the calendar app (using the `open_app` action), look up information there, answer user's question (using the `answer` action) and finish (using the `status` action with complete as goal_status).
+- For requests that are questions (or chat messages), remember to use the `answer` action to reply to user explicitly before finish! Merely displaying the answer on the screen is NOT sufficient (unless the goal is something like "show me ...").
+- If the desired state is already achieved (e.g., enabling Wi-Fi when it's already on), you can just complete the task.
+Action Related:
+- Use the `open_app` action whenever you want to open an app (nothing will happen if the app is not installed), do not use the app drawer to open an app unless all other ways have failed.
+- Use the `input_text` action whenever you want to type something (including password) instead of clicking characters on the keyboard one by one. Sometimes there is some default text in the text field you want to type in, remember to delete them before typing.
+- For `click`, `long_press` and `input_text`, the index parameter you pick must be VISIBLE in the screenshot and also in the UI element list given to you (some elements in the list may NOT be visible on the screen so you can not interact with them).
+- Consider exploring the screen by using the `scroll` action with different directions to reveal additional content.
+- The direction parameter for the `scroll` action can be confusing sometimes as it's opposite to swipe, for example, to view content at the bottom, the `scroll` direction should be set to "down". It has been observed that you have difficulties in choosing the correct direction, so if one does not work, try the opposite as well.
+Text Related Operations:
+- Normally to select certain text on the screen: <i> Enter text selection mode by long pressing the area where the text is, then some of the words near the long press point will be selected (highlighted with two pointers indicating the range) and usually a text selection bar will also appear with options like `copy`, `paste`, `select all`, etc. <ii> Select the exact text you need. Usually the text selected from the previous step is NOT the one you want, you need to adjust the range by dragging the two pointers. If you want to select all text in the text field, simply click the `select all` button in the bar.
+- At this point, you don't have the ability to drag something around the screen, so in general you can not select arbitrary text.
+- To delete some text: the most traditional way is to place the cursor at the right place and use the backspace button in the keyboard to delete the characters one by one (can long press the backspace to accelerate if there are many to delete). Another approach is to first select the text you want to delete, then click the backspace button in the keyboard.
+- To copy some text: first select the exact text you want to copy, which usually also brings up the text selection bar, then click the `copy` button in bar.
+- To paste text into a text box, first long press the text box, then usually the text selection bar will appear with a `paste` button in it.
+- When typing into a text field, sometimes an auto-complete dropdown list will appear. This usually indicating this is a enum field and you should try to select the best match by clicking the corresponding one in the list.
+
+Now output an action from the above list in the correct JSON format, following the reason why you do that. Your answer should look like:
+Reason: ...
+Action: {"action_type":...}
+
+Your Answer:

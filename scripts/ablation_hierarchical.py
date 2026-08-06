@@ -1,14 +1,14 @@
-"""Hierarchical ablation script for U1-U4 memory (record → verify per config).
+"""Hierarchical ablation script for U1-U4 memory (accumulate → verify per config).
 
-Three stages in one run:
+Two phases in one run:
 
-  Stage A  Record    — N rounds (default 3) with ALL memory enabled
+  积累轮 (Accumulate)  — N rounds (default 3) with ALL memory enabled
                        (u1+u2+u3+u4).  Each round reuses the previous round's
                        stores, so U2 (DMS) matures (multi-round ecosystem,
                        paper §4.3), U3 grows its page graph, and U4 accumulates
                        successful trajectories into skills.  The stores are the
                        shared "trained memory" every config later reads.
-  Stage C  Ablate    — hierarchical evaluation, one run per config, all reading
+  验证轮 (Verify)      — hierarchical evaluation, one run per config, all reading
                        the SAME matured stores:
                          u12   → +U1+U2
                          u123  → +U1+U2+U3
@@ -16,18 +16,17 @@ Three stages in one run:
                        Each config's gain over the previous is the marginal
                        contribution of the newly added layer.
 
-(No baseline stage: the reference is u12, the first config, when every later
-config is compared against it.)
-
-The evaluation task set is a DIFFERENT task list from the record set by default
-(record uses `--record-tasks`, ablate uses `--tasks`).  Splitting train/test
-this way measures generalization, not memorization.  Every config sits on the
-same matured memory, so differences are attributable purely to which layer is
-enabled.
+By default the SAME task set is used for accumulation and verification
+(--record-tasks == --tasks).  This is intentional for a memory system: if the
+verification tasks were never seen in the accumulation rounds, U2/U3/U4 would
+have no entries to retrieve and the memory layers would be measured as useless
+(systematic underestimation).  Running the same tasks first trains the store on
+them, so every config is evaluated against memory that actually has relevant
+prior experience.  The first accumulate round also doubles as the baseline of
+"cold-start, no relevant memory".
 
 Usage:
     python scripts/ablation_hierarchical.py \
-        --record-tasks=MarkorCreateNoteAndSms,MarkorMergeNotes,... \
         --tasks=MarkorCreateNoteAndSms,MarkorMergeNotes,... \
         --record-rounds=3 --seed=30
 
@@ -63,24 +62,24 @@ FLAGS = flags.FLAGS
 flags.DEFINE_list(
     'record_tasks',
     None,
-    'Task templates used to mature the memory stores (Stage A). '
+    'Task templates used to mature the memory stores (积累轮). '
     'If None, defaults to all "hard" tasks.',
 )
 flags.DEFINE_list(
     'tasks',
     None,
-    'Task templates used to evaluate each config (Stage B/C). '
-    'If None, defaults to all "hard" tasks. Should differ from --record-tasks '
-    'to measure generalization.',
+    'Task templates used to evaluate each config (验证轮). '
+    'If None, defaults to all "hard" tasks. Defaults to the same list as '
+    '--record-tasks so evaluation tasks have prior experience in the store.',
 )
 flags.DEFINE_integer(
-    'record_rounds', 3, 'Number of all-memory record rounds in Stage A (DMS warm-up).'
+    'record_rounds', 3, 'Number of all-memory accumulation rounds (积累轮, DMS warm-up).'
 )
 flags.DEFINE_integer('seed', 30, 'Base task random seed. Ignored when --seeds is set.')
 flags.DEFINE_list(
     'seeds',
     None,
-    'Repeat the full Stage A + Stage C for each seed in this list, then print '
+    'Repeat the full 积累轮 + 验证轮 for each seed in this list, then print '
     'per-config success mean±std across seeds. Overrides --seed.',
 )
 flags.DEFINE_integer('n', 1, 'Task combinations per template per round.')
@@ -102,14 +101,14 @@ flags.DEFINE_string(
 )
 flags.DEFINE_bool(
     'rag_on',
-    False,
-    'Enable U3 RAG. On by default for u123/u1234. Set --norag_on to force '
-    'local page-graph only.',
+    True,
+    'Enable U3 RAG (remote vector retrieval). On by default. Set --norag_on '
+    'to force local page-graph only.',
 )
 flags.DEFINE_list(
     'configs',
     ['u12', 'u123', 'u1234'],
-    'Which configs to evaluate in Stage C. Choices: u12, u123, u1234. '
+    'Which configs to evaluate in 验证轮. Choices: u12, u123, u1234. '
     'Default runs all three.',
 )
 flags.DEFINE_string(
@@ -119,6 +118,13 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     'run_id', '',
     'Reuse an existing run_id to resume from IncrementalCheckpointer.',
+)
+flags.DEFINE_bool(
+    'multiagent',
+    False,
+    'Enable the multi-agent orchestration layer (Planner/Executor/Reflector). '
+    'Orthogonal to the U1-U4 flags; when off the agent behaves exactly like the '
+    'existing memory-augmented agent.',
 )
 
 
@@ -175,15 +181,20 @@ def _run_phase(
     enable_u4: bool,
     run_id: str,
     store_stage: bool,
+    enable_multiagent: bool = False,
 ) -> list[dict]:
   """Run one phase.  Returns episode metadata."""
   from android_world import checkpointer as checkpointer_lib
   from android_world.agents import infer
   from android_world.agents import memory_agent
+  from android_world.agents import multi_agent
 
-  agent = memory_agent.MemoryAugmentedAgent(
+  agent_cls = (multi_agent.MultiAgentReflectorAgent if enable_multiagent
+               else memory_agent.MemoryAugmentedAgent)
+  agent = agent_cls(
       env,
       infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+      enable_multiagent=enable_multiagent,
       enable_u1=enable_u1,
       enable_u2=enable_u2,
       enable_u3=enable_u3,
@@ -363,9 +374,10 @@ def _save_results(results, phase, run_id) -> str:
   return path
 
 
-def _run_phase_and_save(env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage):
+def _run_phase_and_save(env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage, enable_multiagent=False):
   results = _run_phase(
-      env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage
+      env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage,
+      enable_multiagent=enable_multiagent,
   )
   _save_results(results, phase, run_id)
   print(f'{phase}: {_count_success(results)}/{len(results)} ok')
@@ -389,15 +401,23 @@ def main(argv):
   print(f'Run ID: {run_id}')
   print(f'U3 RAG: {"on" if FLAGS.rag_on else "off (local graph only)"}')
 
-  # Sanity: record tasks must be provided separately from eval tasks for a
-  # clean generalization split.  Warn (not fail) if they're identical.
+  # By design the accumulation and verification task sets are the same by
+  # default (eval tasks need prior experience in the store).  Warn only if a
+  # user explicitly requests DIFFERENT task lists, since that measures
+  # zero-shot generalization which memory layers usually can't satisfy.
   record_tasks = FLAGS.record_tasks
   eval_tasks = FLAGS.tasks
   if record_tasks and eval_tasks and set(record_tasks) == set(eval_tasks):
-    print('WARNING: --record_tasks == --tasks. This measures memorization, '
-          'not generalization. Consider disjoint task lists.')
+    print('Note: --record_tasks == --tasks (same tasks accumulate and evaluate). '
+          'The first accumulate round provides the cold-start baseline; later '
+          'configs are evaluated against memory with prior experience on these tasks.')
+  elif record_tasks and eval_tasks:
+    print('NOTE: --record_tasks differs from --tasks. Evaluation tasks were never '
+          'seen in accumulation, so U2/U3/U4 will have no entries to retrieve — '
+          'this measures zero-shot generalization, and memory layers may appear '
+          'useless. Prefer the same task list unless generalization is the goal.')
 
-  # Multi-seed repetition: each seed runs a fresh Stage A + Stage C with its
+  # Multi-seed repetition: each seed runs a fresh 积累轮 + 验证轮 with its
   # OWN store directories, so every seed is an independent train/test
   # repetition (stores are not polluted across seeds).
   seeds = [int(x) for x in FLAGS.seeds] if FLAGS.seeds else [FLAGS.seed]
@@ -430,28 +450,34 @@ def main(argv):
     FLAGS.u3_store = stores['u3']
     FLAGS.u4_store = stores['u4']
 
-    # ── Stage A: record (mature this seed's stores, all memory on) ────
-    print(f'\n=== STAGE A: record, all memory on, {FLAGS.record_rounds} round(s) ===')
+    # ── 积累轮: record (mature this seed's stores, all memory on) ────
+    print(f'\n=== 积累轮: all memory on, {FLAGS.record_rounds} round(s) ===')
     for r in range(1, FLAGS.record_rounds + 1):
       s = seed + r - 1
-      print(f'\n--- Record round {r}/{FLAGS.record_rounds} (seed={s}) ---')
+      print(f'\n--- 积累 round {r}/{FLAGS.record_rounds} (seed={s}) ---')
       suite = build_suite(s, record_tasks)
       _run_phase_and_save(
-          env, suite, suite_utils, f'stageA_r{r}_seed{seed}',
+          env, suite, suite_utils, f'acc_r{r}_seed{seed}',
           True, True, FLAGS.rag_on, True, run_id, store_stage=True,
+          enable_multiagent=FLAGS.multiagent,
       )
 
-    # ── Stage C: hierarchical ablation (this seed's matured stores) ───
-    print(f'\n=== STAGE C: hierarchical ablation (seed={seed}) ===')
+    # ── 验证轮: hierarchical ablation (this seed's matured stores) ───
+    # 验证轮使用一个与积累轮不重叠的 seed（seed + record_rounds），保证验证
+    # 任务实例在积累轮中从未出现过 —— 这样测的是跨 seed 迁移（记忆把 "这类
+    # 任务怎么做" 的经验迁移到新实例），而不是回放积累轮见过的答案。
+    verify_seed = seed + FLAGS.record_rounds
+    print(f'\n=== 验证轮: hierarchical ablation (acc seed={seed}, verify seed={verify_seed}) ===')
     for cfg in FLAGS.configs:
       spec = CONFIGS[cfg]
       print(f'\n--- Ablate {cfg}: +U1+U2' + ('+U3' if spec['u3'] else '')
             + ('+U4' if spec['u4'] else '') + ' ---')
-      suite = build_suite(seed, eval_tasks)
+      suite = build_suite(verify_seed, eval_tasks)
       results = _run_phase_and_save(
-          env, suite, suite_utils, f'stageC_{cfg}_seed{seed}',
+          env, suite, suite_utils, f'verify_{cfg}_seed{verify_seed}',
           spec['u1'], spec['u2'], spec['u3'] and FLAGS.rag_on, spec['u4'],
           run_id, store_stage=False,
+          enable_multiagent=FLAGS.multiagent,
       )
       across_seeds.setdefault(cfg, []).append(
           (_count_success(results), len(results))
@@ -465,7 +491,7 @@ def main(argv):
   # ── Summary: per-config mean ± std across seeds ────────────────────
   print('\n=== SUMMARY (mean±std across seeds) ===')
   if not across_seeds:
-    print('(no Stage C configs were evaluated)')
+    print('(no verify configs were evaluated)')
     return
   for cfg in FLAGS.configs:
     if cfg not in across_seeds:

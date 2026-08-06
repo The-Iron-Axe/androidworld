@@ -185,13 +185,19 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
 
     if self.enable_u1:
       if self.u1 is None:
-        self.u1 = init_task_state(goal)
+        self.u1 = init_task_state(getattr(self, "_current_goal", "") or goal)
       u1_text = format_u1_context(self.u1)
       if u1_text:
         memory_blocks.append(f"## Task State (U1)\n{u1_text}")
 
     if self.enable_u2 and self.u2 is not None:
-      hint = self.u2.retrieve_hint(goal)
+      # Use the clean task goal (never the Plan-block-prefixed prompt goal) as
+      # the retrieval key, so multi-agent runs match the same entries that
+      # single-agent runs stored under (_current_goal).  A Plan prefix in the
+      # key would degrade dual-factor similarity and break the 2x2 ablation
+      # symmetry between the single- and multi-agent conditions.
+      retrieve_goal = getattr(self, "_current_goal", "") or goal
+      hint = self.u2.retrieve_hint(retrieve_goal)
       if hint:
         memory_blocks.append(f"## Memory Hint (U2)\nSimilar past trajectory: {hint}")
 
@@ -209,7 +215,8 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     if self.enable_u4 and self.u4 is not None:
       app = self.u1.current_app if self.u1 is not None else ""
       page = self.u1.current_page if self.u1 is not None else ""
-      u4_text = self.u4.retrieve_hint(goal, precondition=page)
+      retrieve_goal = getattr(self, "_current_goal", "") or goal
+      u4_text = self.u4.retrieve_hint(retrieve_goal, precondition=page)
       if u4_text:
         memory_blocks.append(f"## Procedural Skill (U4)\n{u4_text}")
 

@@ -611,3 +611,68 @@ Evidence Certifier 必须逐项输出，而不是只给整体结论。
 一句话概括：
 
 > Reflector 由三个不同工种组成，分别检查动作、进度和证据，而不是由同一个角色查看不同时长的历史。
+
+* * *
+
+# 12. 实现附录（v1.0，2026-08-06）
+
+## 12.1 代码结构
+
+多智能体层是**独立的 agent 子类**，与记忆轴正交。U1-U4 记忆模块和 `memory_agent.py` 一行不改。
+
+```
+android_world/agents/
+  multi_agent.py          # MultiAgentReflectorAgent + 数据类（ActionClaim/ProgressLedger/…）
+  multi_agent_verifier.py # 三个纯函数验证器（LLM 驱动）
+  multi_agent_test.py     # 单元 + 集成测试（20 个）
+run.py                    # --multiagent flag
+scripts/ablation_hierarchical.py  # --multiagent flag 透传
+```
+
+## 12.2 类映射
+
+| 设计文档角色 | 实现 |
+| --- | --- |
+| Planner | `MultiAgentReflectorAgent._planner_plan()`（开局一次）+ `_planner_replan()`（STALLED 时，`MAX_REPLANS=2` 上限） |
+| Executor | 继承的 `M3A.step()` 决策路径（不改）；System 从 `action_reason` 提取 `ActionClaim` |
+| Reflector | `multi_agent_verifier.py` 三个纯函数：`verify_action` / `audit_progress` / `certify_evidence` |
+
+## 12.3 Hook 插入表
+
+所有覆写 hook 首行 `if not self._multiagent:` 门控，关闭时行为与现有记忆 agent 完全一致。
+
+| Hook | 多智能体行为 |
+| --- | --- |
+| `_build_action_prompt` | 首步 `_planner_plan` 一次 → 写 U1.pending/current_subgoal → 注入 `## Plan` 块 |
+| `_on_step_complete` | 不调 super()；replay 步跳过；Action Verifier 门控 U3 画边 + U4 学分；Progress Auditor 判定 + 子目标级 Evidence Certifier 定序；U1 账本复刻 |
+| `_on_task_done` | super() (U2 缓冲) + 全局 Evidence Certifier → `_certified` |
+| `flush_memory` | max_steps 耗尽路径补跑全局认证 |
+| `set_episode_success` | `success = success and self._certified`（内部认证与外部真值并存） |
+| `reset` | 清多智能体状态 |
+
+## 12.4 三个验证器信号清单
+
+| Verifier | 输入 | 输出 |
+| --- | --- | --- |
+| Action | claim + 前后元素 + 前后截图 | CORRECT / MISGROUNDED / NO_EFFECT |
+| Progress | 台账签名 + 当前状态 | ADVANCING / STALLED / LOOPING / BUSY_WITHOUT_PROGRESS |
+| Evidence | 验收清单 + 最终状态 | 逐项 PASS/FAIL/NO_EVIDENCE + 整体 |
+
+## 12.5 Flag 矩阵（2×2 消融）
+
+| 命令 | 结构 |
+| --- | --- |
+| `m3a_qwen3_vl_32b` | baseline：单智能体无记忆 |
+| `m3a_qwen3_vl_32b_mem --u1 --u2 --u3 --u4` | 单智能体 + 记忆 |
+| `m3a_qwen3_vl_32b_mem --multiagent` | 多智能体无记忆 |
+| `m3a_qwen3_vl_32b_mem --multiagent --u1 --u2 --u3 --u4` | 多智能体 + 记忆（最终系统） |
+
+## 12.6 关键实现约束
+
+1. **U3 画边门控**：只有 Action Verifier 判 CORRECT 才 `u3.record_transition`，MISGROUNDED/NO_EFFECT 不画边。
+2. **replay 步跳过**：U2 确定性回放的 step 无 action_reason，跳过全部 verifier。
+3. **子目标认证定序**：`Progress ADVANCING → Evidence(子目标) 认证 → 通过才推进台账/换子目标`。
+4. **证据新鲜度**：证据后被修改该值 → 该证据失效（触发重新获取）。
+5. **ActionClaim frozen**：事前从 `action_reason` 提取，任何 verifier 不可篡改（§4.1）。
+6. **非 UI 动作跳过**：status/answer/wait 无 target，跳过 Action Verifier（默认 CORRECT）。
+
