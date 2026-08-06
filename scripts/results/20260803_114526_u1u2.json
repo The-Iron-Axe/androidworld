@@ -1,0 +1,30 @@
+{
+  "run_id": "20260803_114526",
+  "phase": "u1u2",
+  "saved_at": "2026-08-03 12:14:19",
+  "total": 3,
+  "success": 0,
+  "episodes": [
+    {
+      "task_template": "BrowserMultiply",
+      "goal": "Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.",
+      "is_successful": 0.0,
+      "episode_length": 22,
+      "run_time": 738.1178677082062
+    },
+    {
+      "task_template": "ExpenseAddMultipleFromMarkor",
+      "goal": "Go through the transactions in my_expenses.txt in Markor. Log the reimbursable transactions in the pro expense.",
+      "is_successful": 0.0,
+      "episode_length": 6,
+      "run_time": 239.57869410514832
+    },
+    {
+      "task_template": "MarkorCreateNoteAndSms",
+      "goal": "Create a new note in Markor named 2023_02_22_friendly_pig.txt with the following text: The squeaky wheel gets the grease.. Share the entire content of the note with the phone number +12581667698 via SMS using Simple SMS Messenger",
+      "is_successful": 0.0,
+      "episode_length": 18,
+      "run_time": 715.5244064331055
+    }
+  ]
+}

@@ -23,3 +23,20 @@ poetry.lock
 
 # PyCharm
 .idea
+
+# PG-Agent local RAG / AVD scratch
+tmp_pg_agent_steps/
+pg_agent_rag/tunnel/config.env
+
+# Run outputs (large episode pickles)
+runs/
+
+# Transient scratch / generated binaries
+.tmp_app.b64
+.tmp_app.py
+_retr_check.txt
+dms_memory_store/*.pkl
+android_world/env/data/*.apk
+
+# Claude Code local config
+.claude/

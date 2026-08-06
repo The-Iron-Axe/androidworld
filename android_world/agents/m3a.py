@@ -24,6 +24,7 @@ from android_world.agents import m3a_utils
 from android_world.env import interface
 from android_world.env import json_action
 from android_world.env import representation_utils
+from typing import Any
 
 PROMPT_PREFIX = (
     'You are an agent who can operate an Android phone on behalf of a user.'
@@ -356,6 +357,41 @@ class M3A(base_agent.EnvironmentInteractingAgent):
     self.additional_guidelines = None
     self.wait_after_action_seconds = wait_after_action_seconds
 
+  # ── Hook points for memory injection (overridden by subclasses) ──
+
+  def _build_action_prompt(
+      self,
+      goal: str,
+      history_lines: list[str],
+      ui_elements_list: str,
+  ) -> str:
+    """Build the full action-selection prompt.
+
+    Subclasses override this to inject memory context (U1, U2, etc.)
+    before the prompt is sent to the LLM.
+    """
+    return _action_selection_prompt(
+        goal, history_lines, ui_elements_list, self.additional_guidelines
+    )
+
+  def _on_step_complete(self, step_data: dict[str, Any]) -> None:
+    """Called after a successful action step (before next iteration).
+
+    Subclasses override this to update memory state (U1, etc.).
+    """
+
+  def _on_step_failed(self, step_data: dict[str, Any]) -> None:
+    """Called when a step ends in failure (parse error, bad index, exec error).
+
+    Subclasses override this to update failure counters in memory state (U1).
+    """
+
+  def _on_task_done(self, goal: str, step_data: dict[str, Any]) -> None:
+    """Called when the agent declares the task complete.
+
+    Subclasses override this to finalize memory entries (U2, etc.).
+    """
+
   def set_task_guidelines(self, task_guidelines: list[str]) -> None:
     self.additional_guidelines = task_guidelines
 
@@ -382,6 +418,8 @@ class M3A(base_agent.EnvironmentInteractingAgent):
     }
     logging.info('----------step %s----------', str(len(self.history) + 1))
 
+    self._current_goal = goal
+
     state = self.get_post_transition_state()
     logical_screen_size = self.env.logical_screen_size
     orientation = self.env.orientation
@@ -392,6 +430,7 @@ class M3A(base_agent.EnvironmentInteractingAgent):
     before_ui_elements_list = _generate_ui_elements_description_list(
         before_ui_elements, logical_screen_size
     )
+    step_data['before_ui_elements_list'] = before_ui_elements_list
     step_data['raw_screenshot'] = state.pixels.copy()  # pyrefly: ignore[bad-assignment]
     before_screenshot = state.pixels.copy()
     for index, ui_element in enumerate(before_ui_elements):
@@ -406,14 +445,13 @@ class M3A(base_agent.EnvironmentInteractingAgent):
         )
     step_data['before_screenshot_with_som'] = before_screenshot.copy()  # pyrefly: ignore[bad-assignment]
 
-    action_prompt = _action_selection_prompt(
+    action_prompt = self._build_action_prompt(
         goal,
         [
             'Step ' + str(i + 1) + '- ' + step_info['summary']
             for i, step_info in enumerate(self.history)
         ],
         before_ui_elements_list,
-        self.additional_guidelines,
     )
     step_data['action_prompt'] = action_prompt  # pyrefly: ignore[bad-assignment]
     action_output, is_safe, raw_response = self.llm.predict_mm(
@@ -446,6 +484,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
           ' action is performed.'
       )
       self.history.append(step_data)
+      self._on_step_failed(step_data)
 
       return base_agent.AgentInteractionResult(
           False,
@@ -471,6 +510,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
           ' correct JSON format!'
       )
       self.history.append(step_data)
+      self._on_step_failed(step_data)
 
       return base_agent.AgentInteractionResult(
           False,
@@ -497,6 +537,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
             ' the UI element list!'
         )
         self.history.append(step_data)
+        self._on_step_failed(step_data)
         return base_agent.AgentInteractionResult(False, step_data)
 
       # Add mark to the target element.
@@ -514,6 +555,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
         logging.info('Agent stopped since it thinks mission impossible.')
       step_data['summary'] = 'Agent thinks the request has been completed.'  # pyrefly: ignore[bad-assignment]
       self.history.append(step_data)
+      self._on_task_done(goal, step_data)
       return base_agent.AgentInteractionResult(
           True,
           step_data,
@@ -532,6 +574,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
           'Can not execute the action, make sure to select the action with'
           ' the required parameters (if any) in the correct JSON format!'
       )
+      self._on_step_failed(step_data)
       return base_agent.AgentInteractionResult(
           False,
           step_data,
@@ -547,6 +590,8 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
     after_ui_elements_list = _generate_ui_elements_description_list(
         after_ui_elements, logical_screen_size
     )
+    step_data['after_ui_elements'] = after_ui_elements
+    step_data['after_ui_elements_list'] = after_ui_elements_list
     after_screenshot = state.pixels.copy()
     for index, ui_element in enumerate(after_ui_elements):
       if m3a_utils.validate_ui_element(ui_element, logical_screen_size):
@@ -595,6 +640,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
           % summary
       )
       self.history.append(step_data)
+      self._on_step_failed(step_data)
       return base_agent.AgentInteractionResult(
           False,
           step_data,
@@ -606,6 +652,7 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
     step_data['summary_raw_response'] = raw_response
 
     self.history.append(step_data)
+    self._on_step_complete(step_data)
     return base_agent.AgentInteractionResult(
         False,
         step_data,

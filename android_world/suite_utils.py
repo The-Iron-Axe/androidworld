@@ -247,6 +247,7 @@ def _run_task(
     run_episode: Callable[[TaskEvalType], episode_runner.EpisodeResult],
     env: interface.AsyncEnv,
     demo_mode: bool,
+    agent: base_agent.EnvironmentInteractingAgent | None = None,
 ) -> dict[str, Any]:
   """Runs a task.
 
@@ -281,6 +282,14 @@ def _run_task(
     )
   else:
     agent_successful = task_successful if interaction_results.done else 0.0
+    # Give memory-augmented agents the ground-truth outcome so they can
+    # finalize episodic memory with the real result (not the agent's own
+    # completion claim, which can be wrong).
+    if hasattr(agent, 'set_episode_success'):
+      try:
+        agent.set_episode_success(agent_successful > 0.5)
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
     _log_and_print(
         '%s; %s',
         'Task Successful ✅' if agent_successful > 0.5 else 'Task Failed ❌',
@@ -348,6 +357,7 @@ def _run_task_suite(
     return_full_episode_data: bool = False,
     process_episodes_fn=None,
     check_episode_fn: Callable[[dict[str, Any]], bool] | None = None,
+    agent: base_agent.EnvironmentInteractingAgent | None = None,
 ) -> list[dict[str, Any]]:
   """Runs e2e system on suite.
 
@@ -413,7 +423,9 @@ def _run_task_suite(
         _log_and_print('Skipping already processed task %s', instance_name)
         continue
 
-      episode = _run_task(instance, run_episode, env, demo_mode=demo_mode)
+      episode = _run_task(
+          instance, run_episode, env, demo_mode=demo_mode, agent=agent
+      )
       if (
           episode.get(constants.EpisodeConstants.EXCEPTION_INFO) is None
           and check_episode_fn is not None
@@ -505,6 +517,7 @@ def run(
       return_full_episode_data=return_full_episode_data,
       process_episodes_fn=process_episodes_fn,
       check_episode_fn=check_episode_fn,
+      agent=agent,
   )
 
   return results

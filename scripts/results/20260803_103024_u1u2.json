@@ -1,0 +1,30 @@
+{
+  "run_id": "20260803_103024",
+  "phase": "u1u2",
+  "saved_at": "2026-08-03 11:09:46",
+  "total": 3,
+  "success": 0,
+  "episodes": [
+    {
+      "task_template": "BrowserMultiply",
+      "goal": "Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.",
+      "is_successful": 0.0,
+      "episode_length": 22,
+      "run_time": 778.3016002178192
+    },
+    {
+      "task_template": "ExpenseAddMultipleFromMarkor",
+      "goal": "Go through the transactions in my_expenses.txt in Markor. Log the reimbursable transactions in the pro expense.",
+      "is_successful": 0.0,
+      "episode_length": 22,
+      "run_time": 820.3584585189819
+    },
+    {
+      "task_template": "MarkorCreateNoteAndSms",
+      "goal": "Create a new note in Markor named fair_ant_XOdi.txt with the following text: Actions speak louder than words.. Share the entire content of the note with the phone number +13192815309 via SMS using Simple SMS Messenger",
+      "is_successful": 0.0,
+      "episode_length": 18,
+      "run_time": 732.1489951610565
+    }
+  ]
+}

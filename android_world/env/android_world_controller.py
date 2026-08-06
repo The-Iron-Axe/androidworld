@@ -29,6 +29,7 @@ from android_env.proto.a11y import android_accessibility_forest_pb2
 from android_env.wrappers import a11y_grpc_wrapper
 from android_env.wrappers import base_wrapper
 from android_world.env import adb_utils
+from android_world.env import a11y_forwarder_apk
 from android_world.env import representation_utils
 from android_world.utils import file_utils
 import dm_env
@@ -330,4 +331,5 @@ def get_controller(
   )
   android_env_instance = loader.load(config)
   logging.info('Setting up AndroidWorldController.')
+  a11y_forwarder_apk.patch_a11y_forwarder_apk_download()
   return AndroidWorldController(android_env_instance)

@@ -1,0 +1,16 @@
+{
+  "run_id": "20260806_143006",
+  "phase": "stageC_u1234_seed30",
+  "saved_at": "2026-08-06 14:38:23",
+  "total": 1,
+  "success": 1,
+  "episodes": [
+    {
+      "task_template": "MarkorDeleteNote",
+      "goal": "Delete the note in Markor named bold_king_edited.",
+      "is_successful": 1.0,
+      "episode_length": 5,
+      "run_time": 372.5759313106537
+    }
+  ]
+}

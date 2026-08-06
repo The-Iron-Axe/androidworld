@@ -1,0 +1,342 @@
+PG-Agent: An Agent Powered by Page Graph
+Weizhi Chen∗
+Zhejiang Key Lab of Accessible
+Perception & Intelligent Systems,
+Zhejiang University
+Hangzhou, China
+chenweizhi@zju.edu.cn
+Ziwei Wang∗
+Zhejiang Key Lab of Accessible
+Perception & Intelligent Systems,
+Zhejiang University
+Hangzhou, China
+wangziwei98@zju.edu.cn
+Leyang Yang
+Zhejiang Key Lab of Accessible
+Perception & Intelligent Systems,
+Zhejiang University
+Hangzhou, China
+yangleyang@zju.edu.cn
+Sheng Zhou†
+Zhejiang Key Lab of Accessible
+Perception & Intelligent Systems,
+Zhejiang University
+Hangzhou, China
+zhousheng_zju@zju.edu.cn
+Xiaoxuan Tang
+Ant Group
+Beijing, China
+leahxx1226@outlook.com
+Jiajun Bu
+Zhejiang Key Lab of Accessible
+Perception & Intelligent Systems,
+Zhejiang University
+Hangzhou, China
+bjj@zju.edu.cn
+Yong Li†
+Ant Group
+Hangzhou, China
+liyong.liy@antgroup.com
+Wei Jiang
+Ant Group
+Beijing, China
+jonny.jw@antgroup.com
+Abstract
+Graphical User Interface (GUI) agents possess significant commer-
+cial and social value, and GUI agents powered by advanced mul-
+timodal large language models (MLLMs) have demonstrated re-
+markable potential. Currently, existing GUI agents usually utilize
+sequential episodes of multi-step operations across pages as the
+prior GUI knowledge, which fails to capture the complex transition
+relationship between pages, making it challenging for the agents
+to deeply perceive the GUI environment and generalize to new
+scenarios. Therefore, we design an automated pipeline to trans-
+form the sequential episodes into page graphs, which explicitly
+model the graph structure of the pages that are naturally connected
+by actions. To fully utilize the page graphs, we further introduce
+Retrieval-Augmented Generation (RAG) technology to effectively
+retrieve reliable perception guidelines of GUI from them, and a
+tailored multi-agent framework PG-Agent with task decomposition
+strategy is proposed to be injected with the guidelines so that it can
+generalize to unseen scenarios. Extensive experiments on various
+benchmarks demonstrate the effectiveness of PG-Agent, even with
+limited episodes for page graph construction. Our codes will be
+publicly available at https://github.com/chenwz-123/PG-Agent.
+∗Both authors contributed equally to this research.
+†Corresponding author.
+Permission to make digital or hard copies of all or part of this work for personal or
+classroom use is granted without fee provided that copies are not made or distributed
+for profit or commercial advantage and that copies bear this notice and the full citation
+on the first page. Copyrights for components of this work owned by others than the
+author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or
+republish, to post on servers or to redistribute to lists, requires prior specific permission
+and/or a fee. Request permissions from permissions@acm.org.
+MM ’25, Dublin, Ireland
+© 2025 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+ACM ISBN 979-8-4007-2035-2/2025/10
+https://doi.org/10.1145/3746027.3755189
+CCS Concepts
+• Human-centered computing →Human computer interac-
+tion (HCI); Interaction design.
+Keywords
+GUI Agent; Retrieval-Augmented Generation; Multimodal Large
+Language Model
+ACM Reference Format:
+Weizhi Chen, Ziwei Wang, Leyang Yang, Sheng Zhou, Xiaoxuan Tang,
+Jiajun Bu, Yong Li, and Wei Jiang. 2025. PG-Agent: An Agent Powered by
+Page Graph. In Proceedings of the 33rd ACM International Conference on
+Multimedia (MM ’25), October 27–31, 2025, Dublin, Ireland. ACM, New York,
+NY, USA, 13 pages. https://doi.org/10.1145/3746027.3755189
+1
+Introduction
+The Graphical User Interface (GUI) has become crucial for humans
+in interacting with mobile devices and websites. Recently, there
+has been a notable increase in interest in GUI agents that can
+autonomously perform tasks by interacting with the user inter-
+face [27]. It is emerging as a significant topic of study in disci-
+plines such as software engineering and human-computer inter-
+action [19, 31, 36], among several others. Early works employed
+parsing tools to transform the pages into HTML presentations, uti-
+lizing large language models (LLMs) to analyze the page layouts
+to make decisions [14, 39]. With the rapid development of multi-
+modal large language models (MLLMs) [1, 2, 6, 28, 42], MLLM-based
+GUI agents become the mainstream architecture, which are able to
+analyze the screen and generate actions end-to-end.
+The GUI agents are conducted in a structured enclosed space
+where different pages are naturally interconnected through opera-
+tions like clicking. Therefore, it is essential for the agent to possess
+the awareness of possible actions and their consequent pages. How-
+ever, existing works [8, 22, 32] have collected abundant knowledge
+arXiv:2509.03536v1  [cs.AI]  27 Aug 2025
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Weizhi Chen et al.
+Reconstruction
+Page Graph
+0
+1
+2
+6
+9
+0
+4
+5
+0
+1
+5
+8
+Agent Group
+RAG
+Episodes
+PG-Agent
+…
+Figure 1: Illustration of PG-Agent. (i) Convert chain-like
+episodes into a semantically rich page graph; (ii) With page
+graph as GUI prior knowledge, RAG technology assists the
+tailored multi-agent workflow to enhance GUI navigation.
+from diverse devices, but usually treat them as independent items.
+For example, the navigation tasks on GUI involving sequences of
+multi-step operations across different pages, where each step pro-
+vides crucial semantics and functionality for the task. Such linear
+knowledge restricts the agent to focusing mainly on the consecutive
+steps and thus lacks the perceptions of possible actions leading to
+other pages simultaneously. As a result, the semantic association
+information between pages is not fully integrated into the model,
+leading to significant challenges when the model performs complex
+tasks, especially on new tasks. During the deployment phase, it is
+probable that a single sequential episode cannot directly instruct
+the agent to finish the task, while the transition relationships from
+multiple episodes can provide more clues about possible actions and
+corresponding results to pave a new way to the target page. This
+raises a natural question: “How to explicitly model the semantic
+relationships among pages and enhance the perception capability
+of GUI Agents in new scenarios?”
+Fortunately, the pages of GUI screens naturally form a page graph
+connected by the actions, and a sequential episode is essentially
+a path sampling on this graph. Inspired by this concept, we can
+reconstruct the sequential episodes into the page graph, which
+offers a more comprehensive understanding of the page transitions,
+rather than the fragmented page connections brought by discrete
+episodes. Any traversal path in the page graph can be regarded
+as an effective recombination of original independent knowledge
+items. Meanwhile, positioning at a node, the agent can easily obtain
+possible actions from the outgoing edges and perceive consequent
+pages to assist the navigation process.
+Besides, to utilize the page graph as prior knowledge for the
+agent planning, the Retrieval-Augmented Generation (RAG) tech-
+nology [15] is able to effectively leverage it without any parameter
+modifications, which enables the agent to adapt to different scenar-
+ios by simply switching the page graph. In this way, RAG is also
+able to explicitly retrieve the graph-structured information from
+the page graph, offering superior semantic perceptions of page
+transitions. Moreover, the exploration in the page graph of RAG
+is actually an accessing and integrating process of real actions in
+episodes, providing an authentic and reliable set of possible actions
+as guidelines. Previous works have adopted the RAG to retrieve
+guidelines like descriptions of widget functions [16] or reference
+trajectories in similar tasks [45], which are usually discrete without
+graph structure to perceive the current scenario deeply. Therefore,
+a tailored retrieval strategy applied in the page graph is also critical.
+To tackle the aforementioned challenges, we propose an auto-
+mated pipeline to transform the sequential episodes into the page
+graphs, including three stages of page jump determination, node
+similarity check and page graph update. During the process, we
+check every action tuple (i.e., the action and the pages before and
+after it) and gradually update the page graph by combining consecu-
+tive in-page operations into one edge and similar pages as one node.
+Moreover, to retrieving guidelines from the page graphs and fully
+utilize them, we also design a multi-agent framework PG-Agent
+enhanced by tailored RAG technology. First, we use the summary
+of the current screen to locate similar nodes in the page graph and
+conduct breadth first search (BFS) to explore available actions, de-
+riving guidelines like "perform some actions can lead to accomplish
+some tasks". With comprehensive guidelines, we divide the reason-
+ing process into several agents following existing works [35, 38],
+incorporate the task decomposition and inject the guidelines into
+the sub-task planning process, where the perceptions of the GUI
+scenario are particularly critical. We conduct extensive experiments
+on three benchmarks and the results demonstrate the effectiveness
+of PG-Agent, even if we only sample a few episodes to construct
+the page graph. The primary contributions of this paper can be
+summarized as follows:
+• To model the transition relationships between GUI pages, We
+design an automated pipeline to reconstruct the discrete episodes
+into page graphs, which serve as external prior knowledge bases.
+• We propose PG-Agent, a tailored multi-agent framework aug-
+mented by RAG technology. With the incorporation of task de-
+composition, guidelines retrieved from page graphs offer more
+targeted planning reference.
+• Experimental results on three benchmarks demonstrate that PG-
+Agent exhibits superior navigation ability with the page graphs.
+Even if the episodes for page graph construction is limited, the
+effectiveness remains evident.
+2
+Related Work
+2.1
+Retrieval-Augmented Generation
+Retrieval-Augmented Generation (RAG) can solve the issues of
+knowledge out-of-distribution in large models, such as output hal-
+lucination, lack of domain-specific knowledge, and outdated in-
+formation by dynamically parsing the input content and retriev-
+ing relevant external knowledge [46]. Previous research on RAG
+mainly focused on question-answering related tasks [24, 33], such
+as using Table-to-Text methods to convert tabular data into tex-
+tual form to enhance the document QA capability of LLM [25],
+using multi-modal embedding technology to uniform knowledge
+of different modalities to enhance multi-modal QA of the foun-
+dational model [13, 21], and utilizing the chunking methods to
+truncate the query and realize multi-granularity retrieval of ex-
+ternal knowledge [5, 43]. Given that graph structures effectively
+represent complex data relationships and enable efficient informa-
+tion retrieval, the application of RAG technology to graph data
+has emerged as an interesting research focus [30]. GraphRAG [10]
+adopts a clustering approach by connecting small text blocks via
+semantic similarity, then applying community detection to group
+PG-Agent: An Agent Powered by Page Graph
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Task: Go to internet settings
+……
+Episode
+Click(136,133)
+Page Jump Determination
+Action Summary: Click on the "Settings" app icon
+next action tuple
+Node Similarity Check
+Page Summary: This screen is a settings page on a mobile 
+device, displaying various system configuration options 
+such as connected devices, apps & notifications, battery 
+status, display settings, sound preferences, storage 
+information, privacy controls, location services, security 
+features, account management, and accessibility options.
+Page Graph
+retrieved
+Jump?
+action tuple
+Page Graph Update
+Dissimilar?
+new edge
+Updated Page Graph
+Updated Page Graph
+new node
+Figure 2: The overall pipeline of page graph construction. It comprises three stages: page jump determination, node similarity
+check and page graph update.
+nodes, and finally summarizing query answers by analyzing node
+community responses. To model document relationships: Munikoti
+et al. [26] developed a heterogeneous document graph capturing
+multiple document-level relations, while Li et al. [17] and Wang
+et al. [37] established passage-level connections based on shared
+keywords. In the mobile agent scenario, there are also some works
+that use RAG to enhance the base model by providing additional
+interaction knowledge [16, 45]. However, they treat the traffic data
+as independent trajectory chains. We argue that in GUI scenarios,
+the data formed by the jump relationship between different screen
+pages is a global graph structure rather than discrete chains. Thus,
+ignoring the structured signals between pages will limit the model’s
+knowledge learning in this domain.
+2.2
+GUI Agent
+Recent progress has begun to adopt LLMs [34, 41, 45] to build au-
+tonomous agents, leveraging LLMs’ extensive world knowledge
+and strong reasoning capabilities for task planning and execution
+to achieve human-like capabilities. Structural text replaces the orig-
+inal GUI image input into the LLMs. With the emergence of MLLMs,
+visual signals of images are projected into natural language space.
+Therefore, existing research tends to directly use MLLMs to build
+agents, so as to naturally process the visual information in the
+GUI field. One notable approach is to use large-scale general mod-
+els, such as GPT-4v [28], as GUI agents. Many studies use prompt
+engineering to guide these models to perform complex tasks. Ap-
+pAgent [44] is built on GPT-4v, generating guidance documents
+through exploration phase to assist decision-making. Mobile-Agent-
+v2 [35] first proposes multi-agent collaboration in GUI scenarios to
+improve the decision-making effect of each step. Another research
+direction focuses on fine-tuning smaller MLLMs [7, 12, 18] using
+GUI-specific datasets to bridge the domain gap between common
+images and GUI screens.
+3
+Method
+In this section, we will illustrate how to transform chained action
+episodes into structured page graphs, along with readable guideline
+documents. Subsequently, we introduce PG-Agent that is tailored
+to leverage the page graphs to achieve precise GUI navigation.
+3.1
+Page Graph Construction
+Naturally, the pages and their links within a website or an applica-
+tion form a graph structure, and an episode to complete a navigation
+task actually represents a walking path in this graph. Thus, with ex-
+isting episodes in a specific GUI scenario where relevant websites or
+applications are limited, we can construct the corresponding page
+graph as future guidance in this scenario. We design our pipeline
+purely based on visual clues without additional modal inputs such
+as the page’s DOM or HTML architecture. The overall pipeline
+for page graph construction is shown in Figure 2, including three
+stages: page jump determination, node similarity check and page
+graph update.
+Page Jump Determination. Assuming an action tuple in the
+episode 𝐸with task 𝑇is (𝐼𝑏𝑒𝑓𝑜𝑟𝑒,𝐴, 𝐼𝑎𝑓𝑡𝑒𝑟), where 𝐼𝑏𝑒𝑓𝑜𝑟𝑒and
+𝐼𝑎𝑓𝑡𝑒𝑟represent the screenshot images before and after the action
+𝐴, respectively. First, the actions need to be converted into natural
+language. For actions involving specific coordinates, their mean-
+ings will be lost when separated from the corresponding images.
+Therefore, a MLLM [2] is used to summarize them:
+𝑆𝑎𝑐𝑡𝑖𝑜𝑛= MLLM(𝐼𝑏𝑒𝑓𝑜𝑟𝑒,𝐴, P𝑎𝑐𝑡𝑖𝑜𝑛),
+(1)
+where 𝑆𝑎𝑐𝑡𝑖𝑜𝑛is the summary of the action and P𝑎𝑐𝑡𝑖𝑜𝑛is the
+prompt for action summary. Then, considering fewer redundant
+nodes and retrieval effectiveness, only unique pages are adopted to
+build the page graph. Therefore, it is first necessary to determine
+whether the action 𝐴triggers the page jump.
+𝑌𝑗𝑢𝑚𝑝= MLLM(𝐼𝑏𝑒𝑓𝑜𝑟𝑒, 𝐼𝑎𝑓𝑡𝑒𝑟,𝑆𝑎𝑐𝑡𝑖𝑜𝑛, P𝑗𝑢𝑚𝑝),
+(2)
+where 𝑌𝑗𝑢𝑚𝑝∈[Yes, No] represents the determination result and
+P𝑗𝑢𝑚𝑝is the prompt template for page jump assessment. If the
+result is "No", the action is usually in-page operation like typing
+words or opening a drawer that do not lead to new pages, we will
+store this action summary 𝑆𝑎𝑐𝑡𝑖𝑜𝑛in a queue 𝑄𝑎𝑐𝑡𝑖𝑜𝑛and directly
+process the next action tuple in the episode.
+Node Similarity Check. When the result 𝑌𝑗𝑢𝑚𝑝is "Yes", it
+means this action successfully lead to different page. Then we take
+the following step to summarize the image after action based on
+the overall function of the page and key components displayed for
+node similarity check:
+𝑆𝑝𝑎𝑔𝑒= MLLM(𝐼𝑎𝑓𝑡𝑒𝑟, P𝑝𝑎𝑔𝑒),
+(3)

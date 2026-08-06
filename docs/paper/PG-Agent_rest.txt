@@ -1,0 +1,2104 @@
+
+--- Page 4 ---
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Weizhi Chen et al.
+Guidelines
+RAG Pipeline
+Multi-agent Data Flow
+……
+historical trajectory
+current screen 𝐼!
+Screen Summary
+Decision
+Agent
+Observation 
+Agent
+Sub-Goal 
+Planning Agent
+Task: Search for the best 
+Mexican restaurants.
+𝜏"!
+𝜏"!
+𝜏"!
+𝜏"!
+Click
+(300, 100)
+Sub-Graph
+Page Graph
+Global 
+Planning Agent
+Vectorization
+Retrieval
+1. You can take following action: click on the search suggestion "hotels in new 
+york". This can help you achieve goals like: Search for hotels in New York. 
+2. You can take following action: press home. This can help you …
+3. …
+**Conduct a search for Mexican restaurants**
+The search bar is ready for a new query, so the next step is ... The user's global 
+purpose has not been completed yet ...
+Possible actions to push the task progress or complete the goal:
+- Type "best Mexican restaurants" into the search bar.\n - After typing the query, 
+press the search button or hit enter to initiate the search.\n - Review the search 
+results to identify the best Mexican restaurants based on ratings and reviews.
+The user has entered a search query 
+for "Mexican restaurants" and the 
+results are displayed. The next step …
+- Open a web browser or a search app: ...
+- Conduct a search for Mexican restaurants: …
+- Review and select the best options: …
+Figure 3: The framework of multi-agent workflow. It comprises two parts: RAG pipeline and multi-agent group.
+where 𝑆𝑝𝑎𝑔𝑒denotes the summary of the page and P𝑝𝑎𝑔𝑒is the
+template for page summary processing. Next, a dual-level similarity
+check from semantic aspect and pixel aspect was carried out. From
+semantic aspect, we employ similarity search with retrieval model
+to retrieve the top-𝑛most similar page summaries from nodes of
+page graph G = (N, V), which is empty initially:
+𝑆𝑛𝑜𝑑𝑒= Retrieval(𝑆𝑝𝑎𝑔𝑒, G),
+(4)
+where 𝑆𝑛𝑜𝑑𝑒= [𝑆1,𝑆2, . . . ,𝑆𝑛] is composed of retrieved page sum-
+maries. Subsequently, we use the MLLM to further select the index
+of the most similar one:
+𝑖𝑑= MLLM(𝐼𝑎𝑓𝑡𝑒𝑟,𝑆𝑛𝑜𝑑𝑒, P𝑠𝑒𝑙𝑒𝑐𝑡),
+(5)
+where 𝑖𝑑∈[1, 2, . . . ,𝑛] and P𝑠𝑒𝑙𝑒𝑐𝑡is the prompt for index selection.
+From pixel aspect, we extract original image 𝐼𝑖𝑑corresponding to
+selected page summary and compare it with image 𝐼𝑎𝑓𝑡𝑒𝑟to finally
+conclude whether the page can pass the node similarity check:
+𝑌𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟= MLLM(𝐼𝑎𝑓𝑡𝑒𝑟, 𝐼𝑖𝑑, P𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟),
+(6)
+where 𝑌𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟∈[Yes, No] is the check result and P𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟is
+the prompt for similarity check.
+Page Graph Update. When the result 𝑌𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟is "Yes", it
+means that this new page is unique enough among existing nodes
+in the page graph G, and we will create a new node N𝑛𝑒𝑤=
+(𝑆𝑎𝑓𝑡𝑒𝑟, 𝐿𝑎𝑓𝑡𝑒𝑟) to represent the image 𝐼𝑎𝑓𝑡𝑒𝑟, where 𝐿𝑎𝑓𝑡𝑒𝑟is the
+image location of 𝐼𝑎𝑓𝑡𝑒𝑟. Image location 𝐿will only be utilized in
+Equation 6 to get original image 𝐼𝑖𝑑, so the final page graph will not
+contain the pixel information of images, avoiding the huge space
+occupancy of page graph. Besides, the node representing the image
+𝐼𝑏𝑒𝑓𝑜𝑟𝑒can be formulated as N𝑏𝑒𝑓𝑜𝑟𝑒. Following, we incorporate
+the action summary 𝑆𝑎𝑐𝑡𝑖𝑜𝑛into stored action queue 𝑄𝑎𝑐𝑡𝑖𝑜𝑛and
+combime it with the task description 𝑇of the episode as a new
+edge E𝑛𝑒𝑤= (𝑄𝑎𝑐𝑡𝑖𝑜𝑛,𝑇). In this way, we can guide the agent to
+follow these actions when completing similar tasks. Next, we insert
+directed tuple (N𝑏𝑒𝑓𝑜𝑟𝑒, E𝑛𝑒𝑤, N𝑛𝑒𝑤) into page graph G to finish
+update:
+G = G ∪(N𝑏𝑒𝑓𝑜𝑟𝑒, E𝑛𝑒𝑤, N𝑛𝑒𝑤).
+(7)
+If the decision of similarity check is “No", page 𝐼𝑎𝑓𝑡𝑒𝑟can actually
+be represented by existing node 𝑁𝑖𝑑of image 𝐼𝑖𝑑, so the tuple to be
+inserted will be changed to (N𝑏𝑒𝑓𝑜𝑟𝑒, E𝑛𝑒𝑤, N𝑖𝑑):
+G = G ∪(N𝑏𝑒𝑓𝑜𝑟𝑒, E𝑛𝑒𝑤, N𝑖𝑑).
+(8)
+3.2
+Multi-agent Workflow
+The workflow of agent framework could be formalized as a Markov
+Decision Process (MDP) [4, 34, 41]. Previous work mainly use a
+LLM, such as GPT-4 [29], to structure image text with the help
+of additional parsing tools [11, 45], or a separate MLLM [23, 44],
+such as GPT-4V [28], to preprocess the image using the Set-of-
+Marks strategy [40]. Then the design of the agent workflow is
+completed based on the prompt engineering. However, under the
+warper paradigm, the long-content poses a challenge to the reason-
+ing performance of the model, making the model at risk of being
+"lost-in-the-middle" [20].
+In this section, we adopt the multi-agent workflow that logically
+connects multiple MLLM-based agents with different roles. Each
+agent receives different input content and only completes specific
+tasks, which alleviates the context processing pressure of the model,
+and then spends more efforts on the task reasoning stage. Based
+on this architecture proposed before [35], we further introduce the
+task decomposition concept into agent group.
+Our multi-agent workflow is shown in Figure 3 and it mainly
+consists of two key parts: (1) RAG pipeline, which retrieves helpful
+guidelines from page graph based on screen status; (2) Multi-agent
+group: agents with different roles, i.e., global planning agent, ob-
+servation agent, sub-task planning agent and decision agent.
+Guidelines Retrieval. The guidelines retrieved from the page
+graph are the core mechanism to enhance the generalization capa-
+bility of agents in new GUI scenarios. First, we prompt the MLLM
+to analyze the current screen status 𝐼𝑡and generate a screen state
+
+--- Page 5 ---
+PG-Agent: An Agent Powered by Page Graph
+MM ’25, October 27–31, 2025, Dublin, Ireland
+description 𝑆𝐼𝑡. Subsequently, 𝑆𝐼𝑡is vectorized to retrieve the top 𝑛
+most similar nodes N from page graph G:
+𝑆𝐼𝑡= MLLM(𝐼𝑡, P𝑠𝑢𝑚),
+(9)
+N = Retrieval(𝑆𝐼𝑡, G),
+(10)
+where P𝑠𝑢𝑚represents the template for screen summary. Then we
+extract the action queues 𝑄stored in the outgoing edges E of node
+set N. Besides, starting from every outgoing edge E𝑖, we conduct
+BFS with 𝑙layers and gather the tasks stored in the explored edges:
+𝑇𝑖= BFS(E𝑖, G),
+(11)
+where 𝑇𝑖is the gathered achievable tasks from the edge E𝑖. We
+combine the action queue and achievable tasks as the guidelines:
+𝐺𝐼𝑡= [(𝑄1,𝑇1), (𝑄2,𝑇2), . . . , (𝑄𝑘,𝑇𝑘)],
+(12)
+where 𝑘is the number of retrieved guidelines. Each tuple (𝑄𝑖,𝑇𝑖)
+donates that the agent could follow the action queue 𝑄𝑖to complete
+tasks recorded in set 𝑇𝑖.
+Global Planning Agent. P𝐺
+𝑎𝑔𝑒𝑛𝑡is used to perform a global
+high-level sub-task decomposition of the user’s task 𝑇𝑔, breaking
+down the complex task into relatively simple and abstract sub-tasks
+(i.e., the global plan). In this way, the guidelines can inspire the
+agent to focus on completing the current sub-task. This process
+can formulated as:
+R𝑔= P𝐺
+𝑎𝑔𝑒𝑛𝑡(𝐼𝑡,𝑇𝑔).
+(13)
+Observation Agent. O𝑎𝑔𝑒𝑛𝑡is responsible for transforming the
+pixel information into textual perceptions. It observes the screen
+and provides useful visual clues along with a high-level abstract
+functional description. In this stage, we introduce the historical
+interaction record 𝜏<𝑡from the previous moment to help O𝑎𝑔𝑒𝑛𝑡
+perceive task progress. With user’s task 𝑇𝑔, O𝑎𝑔𝑒𝑛𝑡can be formu-
+lated as:
+R𝑜= O𝑎𝑔𝑒𝑛𝑡(𝐼𝑡,𝑇𝑔,𝜏<𝑡),
+(14)
+where𝜏<𝑡= (𝐼0,𝑎0, 𝐼1,𝑎1, ..., 𝐼𝑡−1,𝑎𝑡−1) and𝑎𝑡represents the action
+executed at time-step 𝑡. The goal of the O𝑎𝑔𝑒𝑛𝑡is to directly provide
+explicit screen details to the decision agent D𝑎𝑔𝑒𝑛𝑡, so that it can
+pay more attention in reasoning.
+Sub-Task Planning Agent. P𝑆
+𝑎𝑔𝑒𝑛𝑡selects a sub-task that matches
+the current screen state from the global plan R𝑔, provides a detailed
+description of the current task suggestion, and generates a candi-
+date action list. Based on screen observation R𝑜, global plan R𝑔,
+retrieved guidelines 𝐺𝐼𝑡, and historical trajectory 𝜏<𝑡, this process
+can be formulated as:
+R𝑠= P𝑆
+𝑎𝑔𝑒𝑛𝑡(𝐼𝑡, R𝑜, R𝑔,𝐺𝐼𝑡,𝜏<𝑡).
+(15)
+Decision Agent. D𝑎𝑔𝑒𝑛𝑡eventually chooses the specific action
+to be performed in the current screen state 𝐼𝑡from the candidate
+action list R𝑠via analyzing the previously generated content. The
+decision process can be formulated as:
+R𝑑= D𝑎𝑔𝑒𝑛𝑡(𝐼𝑡, R𝑜, R𝑠,𝐺𝐼𝑡,𝜏<𝑡).
+(16)
+As shown in Figure 3, when given a screen image 𝐼𝑡, RAG
+pipeline will summarizes 𝐼𝑡, vectorizes[9] the summary to retrieve
+similar nodes from page graph G and explore them to generates
+guidelines 𝐺𝐼𝑡. Then, Observation Agent O𝑎𝑔𝑒𝑛𝑡will carefully
+perceive the screen status 𝐼𝑡and produce detailed description of
+General
+Googleapps
+Install
+Single
+Webshopping
+1
+3
+5
+7
+9
+11
+13
+15
+17
+19
+21
+23
+25
+27
+29
+31
+33
+35
+37
+39
+#Guidelines
+3
+0
+2
+2
+0
+38
+2
+9
+28
+8
+103
+35
+98
+73
+70
+149
+55
+211
+117
+186
+29
+60
+159
+74
+231
+36
+96
+186
+49
+168
+27
+29
+99
+25
+159
+15
+30
+67
+21
+95
+31
+45
+29
+8
+99
+35
+46
+22
+1
+50
+16
+19
+25
+12
+89
+15
+11
+10
+0
+64
+1
+0
+4
+0
+45
+2
+2
+4
+0
+25
+74
+0
+6
+0
+22
+1
+1
+6
+0
+39
+23
+0
+0
+0
+22
+1
+0
+1
+0
+43
+1
+0
+5
+0
+15
+36
+0
+5
+0
+18
+1
+0
+1
+0
+18
+6
+0
+87
+0
+8
+1
+0
+48
+0
+5
+1
+0
+95
+0
+28
+0
+0
+23
+0
+15
+0
+39
+17
+0
+46
+2
+15
+10
+0
+5
+88
+1
+0
+0
+26
+1
+0
+0
+0
+16
+1
+2
+0
+0
+0
+0
+1
+0
+0
+10
+0
+0
+0
+0
+0
+61
+0
+0
+0
+7
+2
+0
+0
+0
+1
+0
+0
+0
+0
+2
+0
+0
+0
+0
+2
+0
+0
+0
+0
+0
+12
+0
+0
+0
+1
+2
+0
+0
+0
+1
+0
+50
+100
+150
+200
+Figure 4: The data distribution of guidelines in AITW dataset.
+The x-axis represents the scenario category and the y-axis
+represents the number of retrieved guidelines at each step.
+the page. Next, Global Planning Agent P𝐺
+𝑎𝑔𝑒𝑛𝑡will decouple
+user’s global task 𝑇𝑔into several clear, coherent and relatively easy
+sub-tasks R𝑔. Afterwards, Sub-Task Planning Agent P𝑆
+𝑎𝑔𝑒𝑛𝑡will
+conduct in-depth analysis of the context information, including
+𝐼𝑡, R𝑜, R𝑔, 𝐺𝐼𝑡and 𝜏<𝑡, and complete the fine-grained plan R𝑠of
+the current sub-task under the help of guidelines 𝐺𝐼𝑡. Finally, the
+Decision Agent D𝑎𝑔𝑒𝑛𝑡will use R𝑜, R𝑠, 𝐺𝐼𝑡, and 𝜏<𝑡to generate
+the final decision R𝑑to predict the action that should be performed
+in the current state to advance the task 𝑇𝑔.
+For more details on page graph and multi-agent workflow, please
+refer to the Supplementary Material.
+4
+Experiment
+4.1
+Experimental Setting
+Benchmark Dataset. To assess the navigation ability in both
+mobile and website environment, we evaluate our PG-Agent on two
+GUI agent datasets: Android in the Wild (AITW) [32], Mind2Web [8]
+and GUI Odyssey [22]:
+• AITW: The episodes in AITW dataset are collected in Android
+mobile phone environment, which are divided into five scenarios:
+General, Install, GoogleApps, Single, and WebShopping. We fol-
+low the split setting of SeeClick [7]. For simplicity, we randomly
+sample 1/10 episodes from training split to construct concise
+page graphs based on different scenarios. The specific statistics
+are shown in Table 8.
+• Mind2Web: Mind2Web dataset contains over 2,000 open-ended
+tasks collected from 137 real websites, covering five scenarios:
+Entertainment, Travel, Shopping, Service, and Info. Also, we ran-
+domly sample episodes from the training set. The benchmark on
+Mind2Web is not divided by scenarios, but categorized into cross-
+task, cross-website, and cross-domain to test the generalization
+
+--- Page 6 ---
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Weizhi Chen et al.
+Table 1: Comparison of PG-Agent with different methods on Mind2Web dataset. The best and second-best results in each
+column are highlighted in bold font and underlined.
+Method
+Cross-Task
+Cross-Website
+Cross-Domain
+Ele.Acc
+Op.F1
+Step SR
+Ele.Acc
+Op.F1
+Step SR
+Ele.Acc
+Op.F1
+Step SR
+MindAct
+55.1
+75.7
+52.0
+42.0
+65.2
+38.9
+42.1
+66.5
+39.6
+GPT-4V
+46.4
+73.4
+40.2
+38.0
+67.8
+32.4
+42.4
+69.3
+36.8
+Qwen2.5-VL-72B
+31.9
+84.6
+26.2
+35.7
+80.7
+27.9
+32.0
+83.2
+25.0
+OmniParser
+42.4
+87.6
+39.4
+41.0
+84.8
+36.5
+45.5
+85.7
+42.0
+PG-Agent
+59.0
+84.7
+52.9
+57.3
+81.2
+48.7
+60.2
+84.5
+53.3
+Table 2: Comparison of PG-Agent with different methods on GUI Odyssey dataset. The best and second-best results in each
+column are highlighted in bold font and underlined.
+Method
+Tool
+Information
+Shopping
+Media
+Social
+Multi-Apps
+Overall
+GeminiProVision
+3.3
+4.0
+2.3
+4.3
+1.5
+3.2
+4.9
+CogAgent
+11.8
+15.7
+10.7
+9.2
+11.7
+13.1
+10.7
+GPT-4V
+18.8
+23.5
+20.2
+19.2
+16.9
+13.8
+19.0
+GPT-4o
+20.4
+20.8
+16.3
+31.9
+15.4
+21.3
+16.7
+Qwen2.5-VL-72B
+46.6
+60.0
+44.0
+32.4
+46.1
+54.6
+42.4
+PG-Agent
+48.6
+61.5
+47.2
+35.5
+46.9
+52.6
+47.7
+ability of the agent. Therefore, the Service and Info scenarios
+that only appear at cross-domain test do not have corresponding
+page graphs, so we will use the page graphs of other scenarios
+during evaluation.
+• GUI Odyssey: GUI Odyssey dataset is designed to evaluate the
+navigation ability of the agent in cross-app tasks. This dataset
+contains more than 7,000 episodes with an average of 15+ steps,
+including 6 different scenarios from 201 apps. Similarly, we sam-
+ple part of training episodes of GUI Odyssey to build page graphs.
+The specific statistics of episodes sampling of dataset Mind2Web
+and GUI Odyssey are listed in supplementary materials.
+Model. In this paper, we adopt BGE-M3 [3] as our vectorization
+model and FAISS technique [9] for similarity retrieval. Besides,
+we utilize Qwen2.5-VL-72B [2] as our base MLLM considering its
+strong ability at understanding GUI screens.
+Hyperparameters. According to the statistics of retrieved guide-
+lines (GL), as shown in Figure.4, we set the maximum number of
+GL (Equation 12) to 20 for AITW dataset. Besides, we set 20 for GUI
+Odyssey and 10 for Mind2Web, whose distribution of GL in different
+scenarios can be seen in the supplementary materials. Besides, we
+set the maximum number of layers 𝑙for BFS to 3 and the number
+of retrieved nodes of page similarity search 𝑛to 4.
+4.2
+Main Result
+AITW. We follow the setting of AITW to calculate the action match-
+ing score as the metric. As shown in Table 3, PG-Agent yields the
+best average performance compared to current API-based agents.
+Among the scenarios, the action accuracy in GoogleApps is the
+most prominent, which exceeds state-of-art result by 13.4%. The
+result demonstrates that graph RAG technique can help API-based
+agent improve the execution accuracy in scenarios where prior
+knowledge is available. For error cases in Single scenario, we find
+the length of these episodes is short and the step where the task
+is supposed to end has ambiguity, i.e., our agent tends to continue
+executing some actions to completely finish the task. We further
+analyze this situation in the Supplementary Materials.
+Table 3: Comparison of PG-Agent with different methods
+on AITW dataset. The best and second-best results in each
+column are highlighted in bold font and underlined.
+Method
+General
+Install
+G.Apps
+Single
+WebShop.
+Overall
+ChatGPT-CoT
+5.9
+4.4
+10.5
+9.4
+8.4
+7.7
+PaLM2-CoT
+-
+-
+-
+-
+-
+39.6
+GPT-4V
+41.7
+42.6
+49.8
+72.8
+45.7
+50.5
+Qwen2.5-VL-72B
+35.9
+58.5
+58.8
+50.7
+36.6
+48.1
+OmniParser
+48.3
+57.8
+51.6
+77.4
+52.9
+57.5
+PG-Agent
+51.9
+62.4
+65.0
+64.7
+53.7
+59.5
+Mind2Web. In Mind2Web dataset, we calculate element accuracy
+(Ele.Acc), operation f1 (Op.F1) and step success rate (Step SR) as
+the metrics. Results in Table 1 show that PG-Agent achieves the
+optimal performance in both Ele.Acc and Step.SR metric, and the
+second-best in Op.F1. Besides, the significant improvements can
+be observed in cross-domain split, where we lack for relevant
+prior knowledge in Service and Info scenarios. This indicates that
+the episodes from other scenarios also provide valuable reference,
+which proves the generality of constructed page graph.
+GUI Odyssey. For GUI Odyssey, we adhere the original metric
+setting [22] . From the results in Table 2, we can observe PG-Agent
+produces the best results in most scenarios and surpasses other
+
+--- Page 7 ---
+PG-Agent: An Agent Powered by Page Graph
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Table 4: Ablation results on Mind2Web. The best and second-best results in each column are highlighted in bold font and
+underlined. GL, STP-Agent, D-Agent are the abbreviations of guidelines, sub-task planning agent and decision agent respectively.
+Method
+Cross-Task
+Cross-Website
+Cross-Domain
+Ele.Acc
+Op.F1
+Step SR
+Ele.Acc
+Op.F1
+Step SR
+Ele.Acc
+Op.F1
+Step SR
+PG-Agent
+59.0
+84.7
+52.9
+57.3
+81.2
+48.7
+60.2
+84.5
+53.3
+w/ GL in D-Agent
+58.1
+84.0
+50.7
+57.5
+82.0
+48.5
+59.9
+82.7
+51.5
+w/ GL in STP-Agent
+59.4
+84.5
+52.4
+56.9
+83.1
+48.0
+59.5
+83.4
+52.1
+w/o GL
+58.9
+82.8
+50.2
+57.6
+80.6
+47.6
+59.4
+81.3
+50.4
+Table 5: Ablation results of guidelines for different actions on Mind2Web. The metric is Op.F1 value, where the best result is
+highlighted in bold, and w/o GL means removing the RAG pipeline.
+Method
+Cross-Task
+Cross-Website
+Cross-Domain
+CLICK
+SELECT
+TYPE
+CLICK
+SELECT
+TYPE
+CLICK
+SELECT
+TYPE
+PG-Agent
+90.9
+31.2
+49.5
+88.0
+47.3
+44.0
+88.8
+47.1
+56.3
+w/o GL
+92.9
+29.8
+29.6
+91.0
+40.5
+26.0
+89.6
+40.6
+31.7
+API-based agents, while only in Multi-Apps scenario it is subop-
+timal. This demonstrates that the guidelines retrieved from page
+graph cast some insights into unfamiliar scenario for the agent
+and actually improve the planning process and execution process
+during the navigation.
+4.3
+Ablation Study
+In our PG-Agent, as shown in Figure 3, our graph RAG pipeline
+extracts relevant guidelines (GL) from the page graph (Section 3.1)
+and acts in the planning stage (Sub-Task Planning Agent) and deci-
+sion stage (Decision Agent) respectively. In this section, we use the
+control variable method to analyze the impact of GL on PG-Agent.
+Specifically, we prompt the retrieved GL to different agents, and
+the results are shown in Table 6 and Table 4. It can be seen that on
+AITW[32], our PG-Agent achieves the best results, while removing
+GL (w/o GL) leads to a general decline in performance.
+Table 6: Ablation results on AITW. The best and second-
+best results in each column are highlighted in bold font and
+underlined. GL, STP-Agent, D-Agent are the abbreviations
+of Guidelines, Sub-Task Planning Agent and Decision Agent
+respectively.
+Method
+General
+Install
+G.Apps
+Single
+WebShop.
+Overall
+PG-Agent
+51.9
+62.4
+65.0
+64.7
+53.7
+59.5
+w/ GL in D-Agent
+50.8
+60.5
+63.8
+66.6
+53.4
+59.0
+w/ GL in STP-Agent
+51.4
+59.5
+62.8
+66.1
+52.8
+58.5
+w/o GL
+50.0
+59.8
+63.4
+65.4
+52.7
+58.3
+Meanwhile, introducing GL to different agents also brings per-
+formance improvements. Furthermore, we find that the benefits
+of introducing GL in the Decision Agent (D-Agent) are greater
+than those in the Sub-Task Planning Agent (STP-Agent). The same
+results are also observable in Table 4, but in the web navigation
+tasks [8], agents have different preferences for GL under different
+tasks; for example, in the Cross-Task and Cross-Domain split, in-
+troducing GL to STP-Agent is better than D-Agent, but this result
+is reversed in the Cross-Website split. We attribute these results
+to differences in interaction logic across scenarios and varying
+navigation preferences of the base model for different devices.
+To further validate GL’s advantages, we conduct a fine-grained
+analysis of its impact on each decision step in the Mind2Web[8]
+dataset. As shown in Table 5, the introduction of GL greatly im-
+proves the Opt.F1 score of the ’SELECT’ and ’TYPE’ actions. Re-
+garding the decrease in performance of the ’CLICK’ action, we
+analyze the data and find that the reason is due to the inconsistency
+of the labels in the dataset itself; that is, the ’SELECT’ action has
+two label definitions at the same time: 1) two consecutive ’CLICK’
+actions; 2) a single ’SELECT’ action. Our PG-Agent tends to choose
+more reasonable ’SELECT’ actions. However, this can lead to situa-
+tions where it is judged as having failed, even when it executes the
+correct action. As a result, the Opt.F1 score for the ’SELECT’ type
+decreases.
+4.4
+Page Graph Analysis
+For publicly available datasets (e.g., AITW, Mind2Web and GUI
+Odyssey), there are abundant data of episodes for the construction
+of page graphs, but it actually takes substantial costs for data collec-
+tion. Therefore, in the previous evaluation, we only sample a small
+subset of episodes to build the graph, demonstrating the practicality
+of our framework. In this section, we use the full episodes from the
+dataset to build the graph and compare the result with Section 4.2.
+As shown in Table 7, we find that PG-Agent utilizing full episodes
+only yields better performance in specific scenarios, where the
+random sampling version remains a competitive accuracy score.
+The results indicate that even if there are only limited episodes for
+reference, the page graph built from them can still provide effective
+guidance for PG-Agent.
+
+--- Page 8 ---
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Weizhi Chen et al.
+Table 7: The impact of the page graph on PG-Agent constructed with different data of episodes, where random sampling follows
+the setting in Section 4.1, while full episodes means we utilize all episodes from the training set.
+Data Source
+AITW
+Mind2Web
+General
+Install
+G.Apps
+Single
+WebShop.
+Cross-Task
+Cross-Website
+Cross-Domain
+Random Sampling
+51.9
+62.4
+65.0
+64.7
+53.7
+52.9
+48.7
+53.3
+Full Episodes
+50.5
+59.5
+63.2
+61.4
+54.6
+52.6
+50.0
+54.0
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+201
+202
+203
+204
+205
+206
+207
+(a) Install
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+119
+120
+121
+122
+123
+124
+125
+126
+127
+128
+129
+130
+131
+132
+133
+134
+135
+136
+137
+138
+139
+140
+141
+142
+143
+144
+145
+146
+147
+148
+149
+150
+151
+152
+153
+154
+155
+156
+157
+158
+159
+160
+161
+162
+163
+164
+165
+166
+167
+168
+169
+170
+171
+172
+173
+174
+175
+176
+177
+178
+179
+180
+181
+182
+183
+184
+185
+186
+187
+188
+189
+190
+191
+192
+193
+194
+195
+196
+197
+198
+199
+200
+(b) WebShopping
+Figure 5: Examples of page graph visualizations of scenarios in AITW dataset.
+Table 8: Statistics of sampled episodes in different scenarios
+of dataset AITW and corresponding page graph.
+Scenario
+# Episodes
+# Images
+# Nodes
+# Edges
+General
+43
+341
+132
+168
+Install
+55
+538
+208
+286
+G.Apps
+24
+198
+67
+93
+Single
+55
+194
+92
+70
+WebShop.
+56
+712
+201
+323
+Total
+231
+1983
+700
+940
+To analyze the page graph deeply, we also collect the statistics
+of sampled episodes and the page graph. From Table 8, we can
+find that the nodes in page graph is much less than the images of
+corresponding episodes, suggesting that there are lots of repeated
+pages in the same scenario. Meanwhile, the number of edges is also
+smaller than the number of actions(usually the same as number
+of images), which suggests than some consecutive in-page actions
+have been combined at one edge for the simplicity of the graph
+structure. More statistics on Mind2Web and GUI Odyssey datasets
+are listed in the Supplementary Materials.
+Besides, we visualize some page graphs constructed by the episodes
+from different scenarios in AITW dataset. As shown in Figure 5,
+we can see that the in-degree or out-degree of some nodes in the
+graphs is greater than 1, indicating that some similar pages in the
+episodes share the same nodes. We also visualize some cases of
+Figure 6: Cases of original images sharing the same node.
+these similar pages in Figure 6, demonstrating the effectiveness the
+dual-level similarity check.
+5
+Conclusion
+In this paper, we design an automated pipeline to reconstruct the
+discrete chained episodes into the page graph, capturing the com-
+plex transition relationships between screen pages. To fully utilize
+this prior knowledge as the perceptions of GUI scenarios, we fur-
+ther propose a tailored multi-agent framework PG-Agent equipped
+with the RAG technology to retrieve perception guidelines from the
+graph to improve the planning and execution process. Extensive
+experiments on three benchmark datasets illustrate the effective-
+ness of PG-Agent powered by page graphs, even when the available
+episodes are limited.
+
+--- Page 9 ---
+PG-Agent: An Agent Powered by Page Graph
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Acknowledgments
+This work was supported by the National Natural Science Foun-
+dation of China (Grant No. 62372408, 62476245). This work was
+supported by Ant Group Research Fund.
+References
+[1] Meta AI. 2024. Llama 3.
+https://github.com/meta-llama/llama3 Accessed:
+2024-11-12.
+[2] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, Sibo Song, Kai
+Dang, Peng Wang, Shijie Wang, Jun Tang, et al. 2025. Qwen2. 5-VL Technical
+Report. arXiv preprint arXiv:2502.13923 (2025).
+[3] Jianlv Chen, Shitao Xiao, Peitian Zhang, Kun Luo, Defu Lian, and Zheng Liu.
+2024. BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity
+Text Embeddings Through Self-Knowledge Distillation. arXiv:2402.03216 [cs.CL]
+[4] Minghao Chen, Yihang Li, Yanting Yang, Shiyu Yu, Binbin Lin, and Xiaofei
+He. 2024. AutoManual: Constructing Instruction Manuals by LLM Agents via
+Interactive Environmental Learning. arXiv:2405.16247 [cs.AI] https://arxiv.org/
+abs/2405.16247
+[5] Tong Chen, Hongwei Wang, Sihao Chen, Wenhao Yu, Kaixin Ma, Xinran Zhao,
+and Hongming and Zhang. 2024. Dense X Retrieval: What Retrieval Granularity
+Should We Use?. In Proceedings of the 2024 Conference on Empirical Methods in
+Natural Language Processing. Association for Computational Linguistics, Miami,
+Florida, USA, 15159–15177. doi:10.18653/v1/2024.emnlp-main.845
+[6] Zhe Chen, Weiyun Wang, Hao Tian, Shenglong Ye, Zhangwei Gao, Erfei Cui,
+Wenwen Tong, Kongzhi Hu, Jiapeng Luo, Zheng Ma, et al. 2024. How far are we
+to gpt-4v? closing the gap to commercial multimodal models with open-source
+suites. arXiv preprint arXiv:2404.16821 (2024).
+[7] Kanzhi Cheng, Qiushi Sun, Yougang Chu, Fangzhi Xu, Li YanTao, Jianbing Zhang,
+and Zhiyong Wu. 2024. SeeClick: Harnessing GUI Grounding for Advanced
+Visual GUI Agents. In Proceedings of the 62nd Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers). Association for Computational
+Linguistics, Bangkok, Thailand, 9313–9332. https://aclanthology.org/2024.acl-
+long.505
+[8] Xiang Deng, Yu Gu, Boyuan Zheng, Shijie Chen, Samual Stevens, Boshi Wang,
+Huan Sun, and Yu Su. 2023. Mind2Web: Towards a Generalist Agent for the Web.
+In Advances in Neural Information Processing Systems 36: Annual Conference on
+Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA,
+December 10 - 16, 2023.
+[9] Matthijs Douze, Alexandr Guzhva, Chengqi Deng, Jeff Johnson, Gergely Szilvasy,
+Pierre-Emmanuel Mazaré, Maria Lomeli, Lucas Hosseini, and Hervé Jégou. 2024.
+The Faiss library. (2024). arXiv:2401.08281 [cs.LG]
+[10] Darren Edge, Ha Trinh, Newman Cheng, Joshua Bradley, Alex Chao, Apurva
+Mody, Steven Truitt, Dasha Metropolitansky, Robert Osazuwa Ness, and Jonathan
+Larson. 2025. From Local to Global: A Graph RAG Approach to Query-Focused
+Summarization. arXiv:2404.16130 [cs.CL] https://arxiv.org/abs/2404.16130
+[11] Yao Fu, Dong-Ki Kim, Jaekyeom Kim, Sungryull Sohn, Lajanugen Logeswaran,
+Kyunghoon Bae, and Honglak Lee. 2024. AutoGuide: Automated Generation
+and Selection of Context-Aware Guidelines for Large Language Model Agents.
+arXiv:2403.08978 [cs.CL] https://arxiv.org/abs/2403.08978
+[12] Wenyi Hong, Weihan Wang, Qingsong Lv, Jiazheng Xu, Wenmeng Yu, Junhui
+Ji, Yan Wang, Zihan Wang, Yuxiao Dong, Ming Ding, et al. 2024. Cogagent: A
+visual language model for gui agents. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition. 14281–14290.
+[13] Ziniu Hu, Ahmet Iscen, Chen Sun, Zirui Wang, Kai-Wei Chang, Yizhou Sun,
+Cordelia Schmid, David A. Ross, and Alireza Fathi. 2023. REVEAL: Retrieval-
+Augmented Visual-Language Pre-Training with Multi-Source Multimodal Knowl-
+edge Memory. arXiv:2212.05221 [cs.CV] https://arxiv.org/abs/2212.05221
+[14] Hanyu Lai, Xiao Liu, Iat Long Iong, Shuntian Yao, Yuxuan Chen, Pengbo Shen,
+Hao Yu, Hanchen Zhang, Xiaohan Zhang, Yuxiao Dong, and Jie Tang. 2024.
+AutoWebGLM: A Large Language Model-based Web Navigating Agent. In Pro-
+ceedings of the 30th ACM SIGKDD Conference on Knowledge Discovery and Data
+Mining. 5295—-5306.
+[15] Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin,
+Naman Goyal, Heinrich Küttler, Mike Lewis, Wen tau Yih, Tim Rocktäschel,
+Sebastian Riedel, and Douwe Kiela. 2021. Retrieval-Augmented Generation for
+Knowledge-Intensive NLP Tasks. arXiv:2005.11401 [cs.CL] https://arxiv.org/abs/
+2005.11401
+[16] Yanda Li, Chi Zhang, Wanqi Yang, Bin Fu, Pei Cheng, Xin Chen, Ling Chen,
+and Yunchao Wei. 2024. AppAgent v2: Advanced Agent for Flexible Mobile
+Interactions. arXiv:2408.11824 [cs.HC] https://arxiv.org/abs/2408.11824
+[17] Zijian Li, Qingyan Guo, Jiawei Shao, Lei Song, Jiang Bian, Jun Zhang, and Rui
+Wang. 2024. Graph Neural Network Enhanced Retrieval for Question Answering
+of LLMs. arXiv:2406.06572 [cs.CL] https://arxiv.org/abs/2406.06572
+[18] Kevin Qinghong Lin, Linjie Li, Difei Gao, Zhengyuan Yang, Shiwei Wu, Zechen
+Bai, Weixian Lei, Lijuan Wang, and Mike Zheng Shou. 2024. Showui: One vision-
+language-action model for gui visual agent. arXiv preprint arXiv:2411.17465
+(2024).
+[19] Mario Linares-Vásquez, Kevin Moran, and Denys Poshyvanyk. 2017. Continuous,
+evolutionary and large-scale: A new perspective for automated mobile app testing.
+In 2017 IEEE International Conference on Software Maintenance and Evolution
+(ICSME). IEEE, 399–410.
+[20] Nelson F. Liu, Kevin Lin, John Hewitt, Ashwin Paranjape, Michele Bevilacqua,
+Fabio Petroni, and Percy Liang. 2023. Lost in the Middle: How Language Models
+Use Long Contexts. arXiv:2307.03172 [cs.CL] https://arxiv.org/abs/2307.03172
+[21] Xinwei Long, Jiali Zeng, Fandong Meng, Zhiyuan Ma, Kaiyan Zhang, Bowen Zhou,
+and Jie Zhou. 2024. Generative Multi-Modal Knowledge Retrieval with Large
+Language Models. arXiv:2401.08206 [cs.IR] https://arxiv.org/abs/2401.08206
+[22] Quanfeng Lu, Wenqi Shao, Zitao Liu, Fanqing Meng, Boxuan Li, Botong Chen,
+Siyuan Huang, Kaipeng Zhang, Yu Qiao, and Ping Luo. 2024. GUI Odyssey:
+A Comprehensive Dataset for Cross-App GUI Navigation on Mobile Devices.
+arXiv:2406.08451 [cs.CV] https://arxiv.org/abs/2406.08451
+[23] Yadong Lu, Jianwei Yang, Yelong Shen, and Ahmed Awadallah. 2024. OmniParser
+for Pure Vision Based GUI Agent. arXiv:2408.00203 [cs.CV] https://arxiv.org/
+abs/2408.00203
+[24] Dehai Min, Nan Hu, Rihui Jin, Nuo Lin, Jiaoyan Chen, Yongrui Chen, Yu Li, Guilin
+Qi, Yun Li, Nijun Li, and Qianren Wang. 2024. Exploring the Impact of Table-
+to-Text Methods on Augmenting LLM-based Question Answering with Domain
+Hybrid Data. In Proceedings of the 2024 Conference of the North American Chapter
+of the Association for Computational Linguistics: Human Language Technologies
+(Volume 6: Industry Track). Association for Computational Linguistics, Mexico
+City, Mexico, 464–482. https://aclanthology.org/2024.naacl-industry.41/
+[25] Dehai Min, Nan Hu, Rihui Jin, Nuo Lin, Jiaoyan Chen, Yongrui Chen, Yu Li,
+Guilin Qi, Yun Li, Nijun Li, and Qianren Wang. 2024. Exploring the Impact of
+Table-to-Text Methods on Augmenting LLM-based Question Answering with
+Domain Hybrid Data. arXiv:2402.12869 [cs.CL] https://arxiv.org/abs/2402.12869
+[26] Sai Munikoti, Anurag Acharya, Sridevi Wagle, and Sameera Horawalavithana.
+2023. ATLANTIC: Structure-Aware Retrieval-Augmented Language Model for
+Interdisciplinary Science. arXiv:2311.12289 [cs.CL] https://arxiv.org/abs/2311.
+12289
+[27] Dang Nguyen, Jian Chen, Yu Wang, Gang Wu, Namyong Park, Zhengmian Hu,
+Hanjia Lyu, Junda Wu, Ryan Aponte, Yu Xia, Xintong Li, Jing Shi, Hongjie Chen,
+Viet Dac Lai, Zhouhang Xie, Sungchul Kim, Ruiyi Zhang, Tong Yu, Mehrab
+Tanjim, Nesreen K. Ahmed, Puneet Mathur, Seunghyun Yoon, Lina Yao, Branislav
+Kveton, Thien Huu Nguyen, Trung Bui, Tianyi Zhou, Ryan A. Rossi, and Franck
+Dernoncourt. 2024. GUI Agents: A Survey. arXiv:2412.13501 [cs.AI] https:
+//arxiv.org/abs/2412.13501
+[28] OpenAI. 2023. GPT-4V(ision) System Card. (1 2023). doi:10.26181/25479208.v1
+[29] OpenAI. 2024. GPT-4 Technical Report. arXiv:2303.08774 [cs.CL] https://arxiv.
+org/abs/2303.08774
+[30] Boci Peng, Yun Zhu, Yongchao Liu, Xiaohe Bo, Haizhou Shi, Chuntao Hong,
+Yan Zhang, and Siliang Tang. 2024. Graph Retrieval-Augmented Generation: A
+Survey. arXiv:2408.08921 [cs.AI] https://arxiv.org/abs/2408.08921
+[31] Yujia Qin, Yining Ye, Junjie Fang, Haoming Wang, Shihao Liang, Shizuo Tian,
+Junda Zhang, Jiahao Li, Yunxin Li, Shijue Huang, et al. 2025. UI-TARS: Pioneering
+Automated GUI Interaction with Native Agents. arXiv preprint arXiv:2501.12326
+(2025).
+[32] Christopher Rawles, Alice Li, Daniel Rodriguez, Oriana Riva, and Timothy P.
+Lillicrap. 2023. Android in the Wild: A Large-Scale Dataset for Android Device
+Control. CoRR abs/2307.10088 (2023). arXiv:2307.10088
+[33] Zhengliang Shi, Shuo Zhang, Weiwei Sun, Shen Gao, Pengjie Ren, Zhumin Chen,
+and Zhaochun Ren. 2024. Generate-then-Ground in Retrieval-Augmented Gen-
+eration for Multi-hop Question Answering. In Proceedings of the 62nd Annual
+Meeting of the Association for Computational Linguistics (Volume 1: Long Pa-
+pers). Association for Computational Linguistics, Bangkok, Thailand, 7339–7353.
+doi:10.18653/v1/2024.acl-long.397
+[34] Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik Narasimhan, and
+Shunyu Yao. 2023. Reflexion: Language agents with verbal reinforcement learning.
+Advances in Neural Information Processing Systems 36 (2023), 8634–8652.
+[35] Junyang Wang, Haiyang Xu, Haitao Jia, Xi Zhang, Ming Yan, Weizhou Shen, Ji
+Zhang, Fei Huang, and Jitao Sang. 2025. Mobile-agent-v2: Mobile device operation
+assistant with effective navigation via multi-agent collaboration. Advances in
+Neural Information Processing Systems 37 (2025), 2686–2710.
+[36] Lei Wang, Chen Ma, Xueyang Feng, Zeyu Zhang, Hao Yang, Jingsen Zhang,
+Zhiyuan Chen, Jiakai Tang, Xu Chen, Yankai Lin, Wayne Xin Zhao, Zhewei Wei,
+and Jirong Wen. 2024. A survey on large language model based autonomous
+agents. Frontiers of Computer Science 18, 6 (March 2024). doi:10.1007/s11704-024-
+40231-1
+[37] Yu Wang, Nedim Lipka, Ryan A. Rossi, Alexa Siu, Ruiyi Zhang, and Tyler Derr.
+2023. Knowledge Graph Prompting for Multi-Document Question Answering.
+arXiv:2308.11730 [cs.CL] https://arxiv.org/abs/2308.11730
+
+--- Page 10 ---
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Weizhi Chen et al.
+[38] Zhenhailong Wang, Haiyang Xu, Junyang Wang, Xi Zhang, Ming Yan, Ji Zhang,
+Fei Huang, and Heng Ji. 2025. Mobile-Agent-E: Self-Evolving Mobile Assistant
+for Complex Tasks. arXiv:2501.11733 [cs.CL] https://arxiv.org/abs/2501.11733
+[39] Zhiyong Wu, Chengcheng Han, Zichen Ding, Zhenmin Weng, Zhoumianze Liu,
+Shunyu Yao, Tao Yu, and Lingpeng Kong. 2024. Os-copilot: Towards generalist
+computer agents with self-improvement. arXiv preprint arXiv:2402.07456 (2024).
+[40] Jianwei Yang, Hao Zhang, Feng Li, Xueyan Zou, Chunyuan Li, and Jianfeng Gao.
+2023. Set-of-Mark Prompting Unleashes Extraordinary Visual Grounding in
+GPT-4V. arXiv:2310.11441 [cs.CV] https://arxiv.org/abs/2310.11441
+[41] Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik Narasimhan,
+and Yuan Cao. 2023. React: Synergizing reasoning and acting in language models.
+In International Conference on Learning Representations (ICLR).
+[42] Yuan Yao, Tianyu Yu, Ao Zhang, Chongyi Wang, Junbo Cui, Hongji Zhu, Tianchi
+Cai, Haoyu Li, Weilin Zhao, Zhihui He, et al. 2024. MiniCPM-V: A GPT-4V Level
+MLLM on Your Phone. arXiv preprint arXiv:2408.01800 (2024).
+[43] Antonio Jimeno Yepes, Yao You, Jan Milczek, Sebastian Laverde, and Renyu Li.
+2024. Financial Report Chunking for Effective Retrieval Augmented Generation.
+arXiv:2402.05131 [cs.CL] https://arxiv.org/abs/2402.05131
+[44] Chi Zhang, Zhao Yang, Jiaxuan Liu, Yucheng Han, Xin Chen, Zebiao Huang, Bin
+Fu, and Gang Yu. 2023. Appagent: Multimodal agents as smartphone users. arXiv
+preprint arXiv:2312.13771 (2023).
+[45] Andrew Zhao, Daniel Huang, Quentin Xu, Matthieu Lin, Yong-Jin Liu, and Gao
+Huang. 2024. Expel: Llm agents are experiential learners. In Proceedings of the
+AAAI Conference on Artificial Intelligence, Vol. 38. 19632–19642.
+[46] Siyun Zhao, Yuqing Yang, Zilong Wang, Zhiyuan He, Luna K. Qiu, and Lili
+Qiu. 2024. Retrieval Augmented Generation (RAG) and Beyond: A Compre-
+hensive Survey on How to Make your LLMs use External Data More Wisely.
+arXiv:2409.14924 [cs.CL] https://arxiv.org/abs/2409.14924
+A
+Structural details of page graph.
+In this section, we show the details of the page graphs of Mind2Web
+(Table 9) and GUI Odyssey (Table 10) generated using the page
+graph construction pipeline. "# Episodes" represents the number
+of episodes we sampled from the original data. "# Images" is the
+number of screenshots in the sampled data. "# Nodes" and "# Edges"
+denote the number of nodes and edges in the page graph after
+pipeline processing, i.e., page jump determination, node similarity
+check and page graph update (Algorithm 1).
+Table 9: Statistics of sampled episodes in different scenarios
+of dataset Mind2Web and corresponding page graph.
+Scenario
+# Episodes
+# Images
+# Nodes
+# Edges
+Entertainment
+63
+342
+113
+95
+Travel
+122
+1001
+172
+159
+Shopping
+67
+484
+131
+111
+Total
+252
+1827
+416
+365
+Table 10: Statistics of sampled episodes in different scenarios
+of dataset GUI-Odyssey and corresponding page graph.
+Scenario
+# Episodes
+# Images
+# Nodes
+# Edges
+Tool
+25
+311
+119
+157
+Information
+17
+314
+96
+133
+Shopping
+8
+144
+58
+66
+Media
+16
+166
+60
+85
+Social
+15
+210
+72
+100
+Multi-Apps
+35
+736
+210
+388
+Total
+116
+1881
+615
+929
+B
+Guidance statistics on each benchmark.
+In our PG-Agent, guidelines (GL) represent GUI knowledge re-
+trieved from the prior knowledge base, i.e., page graph (Section 3.1),
+and are used to enhance the agent’s decision making in GUI navi-
+gation flow. Here we exhibit the more GL distribution in Figure 7
+(Mind2Web) and Figure 8 (GUI Odyssey) show the other two bench-
+marks details of retrieved GLs. It can be seen that for different
+datasets, our RAG strategy can effectively retrieve enough GLs to
+assist the agent’s action decision.
+Task
+Website
+1
+3
+5
+7
+9
+11
+13
+15
+17
+#Guidelines
+0
+0
+0
+0
+3
+0
+364
+390
+367
+254
+378
+162
+257
+177
+222
+96
+194
+131
+141
+80
+51
+27
+64
+22
+1
+13
+6
+5
+7
+1
+9
+0
+1
+1
+0
+1
+0
+50
+100
+150
+200
+250
+300
+350
+Figure 7: The data distribution of guidelines in Mind2Web
+dataset.
+General Tool
+Information Management
+Media Entertainment
+Multi Apps
+Social Sharing
+Web Shopping
+1
+3
+5
+7
+9
+11
+13
+15
+17
+19
+21
+23
+25
+27
+29
+31
+#Guidelines
+20
+0
+0
+1
+0
+0
+41
+0
+1
+38
+0
+0
+88
+1
+41
+131
+40
+14
+249
+1216
+249
+491
+728
+614
+583
+874
+244
+605
+552
+223
+833
+1169
+425
+832
+751
+4
+705
+721
+286
+644
+568
+0
+751
+473
+292
+785
+558
+3
+712
+500
+245
+681
+394
+715
+650
+170
+344
+432
+194
+56
+336
+59
+82
+392
+126
+0
+71
+24
+188
+335
+168
+1
+89
+69
+323
+618
+58
+77
+54
+25
+30
+205
+82
+329
+60
+25
+52
+219
+193
+8
+136
+2
+12
+264
+204
+0
+37
+0
+43
+304
+20
+0
+142
+0
+98
+179
+2
+93
+0
+0
+3
+287
+0
+56
+0
+0
+1
+288
+1
+1
+0
+29
+5
+87
+0
+0
+0
+4
+0
+45
+0
+0
+0
+0
+0
+53
+0
+0
+0
+0
+0
+124
+0
+0
+0
+0
+0
+63
+0
+0
+0
+0
+0
+92
+0
+0
+0
+0
+0
+7
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+14
+0
+0
+0
+0
+0
+6
+0
+0
+0
+0
+0
+7
+0
+0
+0
+200
+400
+600
+800
+1000
+1200
+Figure 8: The data distribution of guidelines in GUI Odyssey
+dataset.
+
+--- Page 11 ---
+PG-Agent: An Agent Powered by Page Graph
+MM ’25, October 27–31, 2025, Dublin, Ireland
+PRESS_HOME
+Scroll up
+Click
+Click
+Type("yahoo")
+Click
+Click
+Set  COMPLETE
+Task: Install the Yahoo app
+Figure 9: Navigation process of PG-Agent.
+C
+Case Study
+In this section, we select a part of cases for detailed analysis. When
+facing the Click operation, we use red rectangle to mark ground-
+truth, and green rectangle to mark the location where PG-Agent
+clicks.
+As shown in Figure 9, our PG-Agent can successfully complete
+tasks with long steps. At the same time, we figure out that the
+inconsistency between ground-truth and the model’s judgment on
+when the task should be completed led to some failed cases. In
+Figure 10(a), the task is to search Amazon. After getting the search
+results of Amazon, PG-Agent believes that it is necessary to click
+Amazon’s website to complete the whole task. A similar situation
+occurs in Figure 10(b). When secure checkout is performed, the
+pop-up sign in interface naturally means that the task is not over
+yet, further sign in is required to complete. This is exactly what PG-
+Agent thinks, which is inconsistent while the answer determines
+the task is already completed.
+
+--- Page 12 ---
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Weizhi Chen et al.
+Task: Search amazon
+Ground-truth:
+Task complete
+PG-Agent:
+Click Amazon's website
+Click
+(a)
+Task: Go to cart section and secure checkout
+Click
+Click
+Ground-truth:
+Task complete
+PG-Agent:
+Click Email input box
+(b)
+Figure 10: Cases determined as failure steps in "Single" scenario.
+
+--- Page 13 ---
+PG-Agent: An Agent Powered by Page Graph
+MM ’25, October 27–31, 2025, Dublin, Ireland
+Algorithm 2 The workflow of PG-Agent.
+Input: user’s goal 𝑇𝑔; current screen state 𝐼𝑡; Maximum length of
+episode 𝐻; page graph G; Observation Agent O𝑎𝑔𝑒𝑛𝑡; Global
+Planning Agent P𝐺
+𝑎𝑔𝑒𝑛𝑡; Sub-Task Planning Agent P𝑆
+𝑎𝑔𝑒𝑛𝑡; De-
+cision Agent D𝑎𝑔𝑒𝑛𝑡.
+Output: Action decision R𝑑based on current screen state 𝐼𝑡.
+1: // Guidelines Retrieval
+2: 𝐺𝐼𝑡←𝑅𝐴𝐺(𝐼𝑡, G)
+3: // Task Decomposition
+4: R𝑔←P𝐺
+𝑎𝑔𝑒𝑛𝑡(𝐼𝑡,𝑇𝑔)
+5: 𝑡←0
+6: 𝜏←[]
+7: while 𝑡< 𝐻and R𝑑≠"COMPLETE" do
+8:
+// Observation Generation
+9:
+R𝑜←O𝑎𝑔𝑒𝑛𝑡(𝐼𝑡,𝑇𝑔,𝜏<𝑡)
+10:
+// Candidate Action Generation
+11:
+R𝑠←P𝑆
+𝑎𝑔𝑒𝑛𝑡(𝐼𝑡, R𝑜, R𝑔,𝐺𝐼𝑡,𝜏<𝑡)
+12:
+// Final Decision
+13:
+R𝑑←D𝑎𝑔𝑒𝑛𝑡(𝐼𝑡, R𝑜, R𝑠,𝐺𝐼𝑡,𝜏<𝑡)
+14:
+𝜏←𝜏∪R𝑑
+15:
+𝑡←𝑡+ 1
+16: end while
+D
+Pseudocode of page graph construction and
+multi-agent workflow.
+In this part, we present the details of two core modules in the form
+of pseudocode, (i) the generation pipeline of the page graph (Algo-
+rithm 1) and (ii) the workflow of the Agent (Algorithm 2). Through
+Algorithm 1, we can automatically transform discrete chain-like
+episodes into high-quality page graph as GUI prior knowledge base.
+Then, with the empowerment of page graph, the multi-agent sys-
+tem as Algorithm 1 can effectively complete the GUI navigation
+task.
+Algorithm 1 The pipeline of page graph construction.
+Input: Actions 𝐴;Images 𝐼;Image Locations 𝐿;Task 𝑇.
+Output: Page graph G.
+1: 𝑁𝑏𝑒𝑓𝑜𝑟𝑒←∅
+2: 𝑄𝑎𝑐𝑡𝑖𝑜𝑛←[]
+3: G ←[]
+4: for 𝑖∈1, 2, ...|𝐸| do
+5:
+// Page Jump Determination
+6:
+if 𝑖> 1 then
+7:
+𝑆(𝑖−1)
+𝑎𝑐𝑡𝑖𝑜𝑛←{𝐼(𝑖−1),𝐴(𝑖−1)}
+8:
+𝑄𝑎𝑐𝑡𝑖𝑜𝑛←𝑄𝑎𝑐𝑡𝑖𝑜𝑛∪{𝑆(𝑖−1)
+𝑎𝑐𝑡𝑖𝑜𝑛}
+9:
+𝑌(𝑖)
+𝑗𝑢𝑚𝑝←{𝐼(𝑖−1), 𝐼(𝑖),𝑆(𝑖−1)
+𝑎𝑐𝑡𝑖𝑜𝑛}
+10:
+if 𝑌(𝑖)
+𝑗𝑢𝑚𝑝=’No’ then
+11:
+Continue
+12:
+end if
+13:
+end if
+14:
+// Node Similarity Check
+15:
+𝑆(𝑖)
+𝑝𝑎𝑔𝑒←𝐼(𝑖)
+16:
+𝑆(𝑖)
+𝑛𝑜𝑑𝑒←{𝑆(𝑖)
+𝑝𝑎𝑔𝑒, G}
+17:
+𝑖𝑑←{𝐼(𝑖),𝑆(𝑖)
+𝑛𝑜𝑑𝑒}
+18:
+𝐼𝑖𝑑, 𝑁𝑖𝑑←{𝑖𝑑, 𝐿, G}
+19:
+𝑌(𝑖)
+𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟←{𝐼(𝑖), 𝐼𝑖𝑑}
+20:
+// Page Graph Update
+21:
+if 𝑌(𝑖)
+𝑑𝑖𝑠𝑠𝑖𝑚𝑖𝑙𝑎𝑟=’Yes’ then
+22:
+𝑁𝑛𝑒𝑤←{𝐼(𝑖), 𝐿(𝑖)}
+23:
+else
+24:
+𝑁𝑛𝑒𝑤←𝑁𝑖𝑑
+25:
+end if
+26:
+if 𝑖> 1 then
+27:
+𝐸𝑛𝑒𝑤←{𝑄𝑎𝑐𝑡𝑖𝑜𝑛,𝑇}
+28:
+G = G ∪(𝑁𝑏𝑒𝑓𝑜𝑟𝑒, 𝐸𝑛𝑒𝑤, 𝑁𝑛𝑒𝑤)
+29:
+end if
+30:
+𝑁𝑏𝑒𝑓𝑜𝑟𝑒←𝑁𝑛𝑒𝑤
+31: end for
+32: return G

@@ -29,10 +29,13 @@ from absl import logging
 from android_world import checkpointer as checkpointer_lib
 from android_world import registry
 from android_world import suite_utils
+from android_world.agents import atmem_agent
 from android_world.agents import base_agent
+from android_world.agents import dms_agent
 from android_world.agents import human_agent
 from android_world.agents import infer
 from android_world.agents import m3a
+from android_world.agents import memory_agent
 from android_world.agents import random_agent
 from android_world.agents import seeact
 from android_world.agents import t3a
@@ -134,13 +137,59 @@ _CHECKPOINT_DIR = flags.DEFINE_string(
 )
 _OUTPUT_PATH = flags.DEFINE_string(
     'output_path',
-    os.path.expanduser('~/android_world/runs'),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs'),
     'The path to save results to if not resuming from a checkpoint is not'
     ' provided.',
 )
 
 # Agent specific.
 _AGENT_NAME = flags.DEFINE_string('agent_name', 'm3a_gpt4v', help='Agent name.')
+_U1 = flags.DEFINE_boolean(
+    'u1',
+    False,
+    'Enable U1 task-state memory (episode-level structured state tracking).',
+)
+_U2 = flags.DEFINE_boolean(
+    'u2',
+    False,
+    'Enable U2 episodic memory (cross-task DMS trajectory reuse).',
+)
+_U2_PERSISTENCE_DIR = flags.DEFINE_string(
+    'u2_persistence_dir',
+    '',
+    'Directory for U2 episodic memory persistence. If empty, memory is not persisted.',
+)
+_U3_PERSISTENCE_DIR = flags.DEFINE_string(
+    'u3_persistence_dir',
+    '',
+    'Directory for U3 page-graph persistence. If empty, the local page graph is not persisted across runs.',
+)
+_U3 = flags.DEFINE_boolean(
+    'u3',
+    False,
+    'Enable U3 environment knowledge (PG-Agent page-graph RAG via RAG_URL).',
+)
+_U4 = flags.DEFINE_boolean(
+    'u4',
+    False,
+    'Enable U4 procedural skill memory (mine reusable skills from successful trajectories).',
+)
+_U4_PERSISTENCE_DIR = flags.DEFINE_string(
+    'u4_persistence_dir',
+    '',
+    'Directory for U4 skill-library persistence. If empty, skills are not persisted.',
+)
+_RAG_URL = flags.DEFINE_string(
+    'rag_url',
+    '',
+    'U3 RAG service URL. Empty = use env RAG_URL or http://127.0.0.1:18180.',
+)
+
+_SCREENSHOT_SCALE = flags.DEFINE_float(
+    'screenshot_scale',
+    1.0,
+    'Downscale factor for screenshots fed to the LLM (e.g. 0.5 = 540x1200).',
+)
 
 _FIXED_TASK_SEED = flags.DEFINE_boolean(
     'fixed_task_seed',
@@ -189,6 +238,41 @@ def _get_agent(
     agent = m3a.M3A(env, infer.Gpt4Wrapper('gpt-4-turbo-2024-04-09'))
   elif _AGENT_NAME.value == 'm3a_qwen3_vl_32b':
     agent = m3a.M3A(env, infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'))
+  # ATMem agent.
+  elif _AGENT_NAME.value == 'atmem_qwen3_vl_32b':
+    agent = atmem_agent.ATMemAgent(
+        env, infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+    )
+  # DMS v3 agents.
+  elif _AGENT_NAME.value == 'dms_gpt4v':
+    agent = dms_agent.DMSAgent(
+        env, infer.Gpt4Wrapper('gpt-4-turbo-2024-04-09')
+    )
+  elif _AGENT_NAME.value == 'dms_gemini_gcp':
+    agent = dms_agent.DMSAgent(
+        env, infer.GeminiGcpWrapper(model_name='gemini-1.5-pro-latest')
+    )
+  elif _AGENT_NAME.value == 'dms_qwen3_vl_32b':
+    agent = dms_agent.DMSAgent(
+        env,
+        infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+        screenshot_scale=_SCREENSHOT_SCALE.value,
+    )
+  # Memory-augmented agent with orthogonal U1/U2/U3 flags.
+  elif _AGENT_NAME.value == 'm3a_qwen3_vl_32b_mem':
+    agent = memory_agent.MemoryAugmentedAgent(
+        env,
+        infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+        enable_u1=_U1.value,
+        enable_u2=_U2.value,
+        enable_u3=_U3.value,
+        enable_u4=_U4.value,
+        u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
+        u3_persistence_dir=_U3_PERSISTENCE_DIR.value,
+        u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
+        rag_url=_RAG_URL.value or None,
+        screenshot_scale=_SCREENSHOT_SCALE.value,
+    )
   # SeeAct.
   elif _AGENT_NAME.value == 'seeact':
     agent = seeact.SeeAct(env)

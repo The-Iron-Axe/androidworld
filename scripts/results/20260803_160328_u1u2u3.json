@@ -1,0 +1,16 @@
+{
+  "run_id": "20260803_160328",
+  "phase": "u1u2u3",
+  "saved_at": "2026-08-03 16:31:00",
+  "total": 1,
+  "success": 0,
+  "episodes": [
+    {
+      "task_template": "MarkorMergeNotes",
+      "goal": "Merge the contents of Markor notes tough_frog_2023_08_05.txt, proud_cat_edited.txt and 2023_08_21_friendly_koala.md (in the same order) into a new Markor note named mIObBbo4 and save it. Add a new line between the content of each note.",
+      "is_successful": 0.0,
+      "episode_length": 40,
+      "run_time": 1565.5795345306396
+    }
+  ]
+}

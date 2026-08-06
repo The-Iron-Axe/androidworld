@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AndroidWorld 记忆消融测试 — 进度</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #1e1e2e;
+    color: #cdd6f4;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  .container { max-width: 760px; margin: 0 auto; }
+
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #7f849c; font-size: 13px; margin-bottom: 20px; }
+
+  .card {
+    background: #2a2a3c;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+    border: 1px solid #3b3b52;
+  }
+  .card-active { border-color: #89b4fa; box-shadow: 0 0 8px rgba(137,180,250,0.2); }
+  .running-tag {
+    font-size: 11px; color: #1e1e2e; background: #fab387;
+    padding: 1px 6px; border-radius: 4px; vertical-align: middle;
+  }
+
+  .current-banner {
+    background: linear-gradient(90deg, #31324a, #2a2a3c);
+    border: 1px solid #89b4fa;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .cur-row1 {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: #a6adc8; margin-bottom: 4px;
+  }
+  .cur-task-name { font-size: 18px; font-weight: 600; color: #f5e0dc; margin-bottom: 8px; }
+  .cur-row2 {
+    display: flex; align-items: center; gap: 10px; font-size: 15px; color: #cdd6f4;
+  }
+  .cur-step-bar-track {
+    flex: 1; height: 8px; background: #1e1e2e; border-radius: 4px; overflow: hidden;
+  }
+  .cur-step-bar {
+    display: block; height: 100%; width: 0%;
+    background: #a6e3a1; transition: width 0.5s ease;
+  }
+  .seg-grid {
+    display: grid;
+    grid-template-columns: repeat(19, 1fr);
+    gap: 3px;
+    margin: 10px 0;
+  }
+  .seg {
+    aspect-ratio: 1;
+    border-radius: 3px;
+    min-height: 12px;
+    cursor: pointer;
+    background: #3b3b52;
+    border: 1px solid #45475a;
+  }
+  .seg-wait { background: #2a2a3c; border-color: #38384a; }
+  .seg-running { background: #fab387; }
+  .seg-fail { background: #f38ba8; }
+  .seg-partial { background: #f9e2af; }
+  .seg-allok { background: #a6e3a1; }
+  .seg-pending { background: #2a2a3c; border-style: dashed; }
+
+  .phase {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .phase-name { font-size: 16px; font-weight: 600; }
+  .phase-stats { font-size: 14px; color: #a6adc8; }
+
+  .bar-track {
+    height: 14px;
+    background: #1e1e2e;
+    border-radius: 7px;
+    overflow: hidden;
+    position: relative;
+    margin-bottom: 6px;
+  }
+  .bar-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #89b4fa, #a6e3a1);
+    border-radius: 7px;
+    transition: width 0.5s ease;
+  }
+  .bar-label {
+    font-size: 12px; color: #7f849c;
+    display: flex; justify-content: space-between;
+  }
+
+  #meta {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    font-size: 12px; color: #7f849c; margin-bottom: 20px;
+  }
+  .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px;
+  }
+  .dot.live { background: #a6e3a1; animation: pulse 1.5s infinite; }
+  .dot.idle { background: #f38ba8; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .empty { text-align: center; color: #7f849c; padding: 40px 0; font-size: 14px; }
+  .err { color: #f38ba8; text-align: center; padding: 20px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>AndroidWorld 记忆消融测试</h1>
+  <div class="sub">U1 任务状态 / U1+U2 情节记忆</div>
+  <div id="meta"><span class="dot idle" id="dot"></span><span id="live-text">等待数据…</span><span id="updated"></span></div>
+
+  <div id="current-banner" class="current-banner" style="display:none">
+    <div class="cur-row1">
+      <span id="cur-phase"></span>
+      <span id="cur-task-num"></span>
+    </div>
+    <div id="cur-task-name" class="cur-task-name"></div>
+    <div class="cur-row2">
+      <span id="cur-step"></span>
+      <span class="cur-step-bar-track"><span id="cur-step-bar" class="cur-step-bar"></span></span>
+    </div>
+  </div>
+
+  <div id="content">
+    <div class="empty">还没有进度数据。<br>运行 <code>python scripts/test_u1_u2.py</code> 后此处会实时显示。</div>
+  </div>
+</div>
+
+<script>
+const PROGRESS_URL = 'progress.json';
+const REFRESH_MS = 15000;
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+const PHASE_LABELS = {
+  'u1': '+U1',
+  'u1u2_record': '+U1+U2 记录',
+  'u1u2_verify': '+U1+U2 验证',
+  'u1u2': '+U1+U2',
+};
+
+function segmentCell(name, cell) {
+  // cell: {done, ok, total} — render one task-template segment
+  const total = cell?.total ?? 0;
+  const done = cell?.done ?? 0;
+  const ok = cell?.ok ?? 0;
+  let cls = 'seg';
+  if (total === 0) cls += ' seg-pending';
+  else if (done === total) cls += (ok === total ? ' seg-allok' : (ok > 0 ? ' seg-partial' : ' seg-fail'));
+  else if (done > 0) cls += ' seg-running';
+  else cls += ' seg-wait';
+  const title = `${name}\n${done}/${total} done, ${ok} ok`;
+  return `<div class="${cls}" title="${esc(title)}"></div>`;
+}
+
+function renderBanner(data) {
+  const banner = document.getElementById('current-banner');
+  const cur = data.current;
+  if (!cur) {
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = 'block';
+  document.getElementById('cur-phase').textContent =
+    (PHASE_LABELS[cur.phase] || cur.phase) + ' · 进行中';
+  document.getElementById('cur-task-num').textContent =
+    `任务 ${cur.task_idx}/${cur.task_total}`;
+  document.getElementById('cur-task-name').textContent = cur.task_name || '';
+  const step = cur.step ?? 0, max = cur.step_max ?? 0;
+  document.getElementById('cur-step').textContent =
+    max > 0 ? `第 ${step} 步 / 上限 ${max} 步` : `已执行 ${step} 步`;
+  const pct = max > 0 ? Math.min(100, Math.round(step / max * 100)) : 0;
+  document.getElementById('cur-step-bar').style.width = pct + '%';
+}
+
+function render(data) {
+  const content = document.getElementById('content');
+  renderBanner(data);
+  if (!data) {
+    content.innerHTML = '<div class="empty">读取失败，检查 <code>progress.json</code> 是否可访问</div>';
+    return;
+  }
+
+  const tasks = data.tasks || [];
+  const phases = data.phases || {};
+  const phaseNames = ['u1', 'u1u2_record', 'u1u2_verify'];
+
+  if (tasks.length === 0) {
+    content.innerHTML = '<div class="empty">还没有进度数据。<br>运行 <code>python scripts/test_u1_u2.py</code> 后此处会实时显示。</div>';
+    return;
+  }
+
+  // Which phases exist (some may not have started yet)
+  const cards = phaseNames.map(pname => {
+    const ph = phases[pname];
+    if (!ph) return null;
+    const done = ph.done ?? 0, total = ph.total ?? 0, ok = ph.ok ?? 0;
+    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+    const label = PHASE_LABELS[pname] || pname;
+    const isActive = data.active_phase === pname;
+
+    const segments = tasks.map(name => {
+      const cell = (ph.per_task || {})[name];
+      return segmentCell(name, cell);
+    }).join('');
+
+    return `
+      <div class="card ${isActive ? 'card-active' : ''}">
+        <div class="phase">
+          <span class="phase-name">${label}${isActive ? ' <span class="running-tag">运行中</span>' : ''}</span>
+          <span class="phase-stats">${ok}/${done} 成功 · ${done}/${total} episode</span>
+        </div>
+        <div class="seg-grid">${segments}</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="bar-label"><span>${esc(ph.current_task || '')}</span><span>${pct}%</span></div>
+      </div>
+    `;
+  }).filter(Boolean).join('');
+
+  content.innerHTML = cards || '<div class="empty">尚无进度</div>';
+}
+
+function setLive(active) {
+  const dot = document.getElementById('dot');
+  const text = document.getElementById('live-text');
+  dot.className = 'dot ' + (active ? 'live' : 'idle');
+  text.textContent = active ? '任务运行中' : '等待任务';
+}
+
+async function poll() {
+  try {
+    const res = await fetch(PROGRESS_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    const updated = document.getElementById('updated');
+    updated.textContent = '更新于 ' + (data.updated_at || '');
+    render(data);
+    const lastModified = res.headers.get('Last-Modified');
+    if (lastModified) {
+      const age = Date.now() - new Date(lastModified).getTime();
+      setLive(age < 30000);
+    } else {
+      setLive(true);
+    }
+  } catch (e) {
+    render(null);
+    setLive(false);
+  }
+}
+
+poll();
+setInterval(poll, REFRESH_MS);
+</script>
+</body>
+</html>

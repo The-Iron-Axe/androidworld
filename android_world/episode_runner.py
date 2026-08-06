@@ -100,6 +100,9 @@ def run_episode(
           'red',
       )
   )
+  # Flush memory for agents that accumulate trajectory across steps
+  if hasattr(agent, 'flush_memory'):
+    agent.flush_memory(goal)
   return EpisodeResult(
       done=result.done, step_data=_transpose_lod_to_dol(output)  # pylint: disable=undefined-variable  # pyrefly: ignore[unbound-name]
   )

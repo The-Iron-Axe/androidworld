@@ -26,6 +26,7 @@ from android_world.agents.memory.environment import (
     EnvKnowledge, build_screen_summary,
 )
 from android_world.agents.memory.episodic import EpisodicMemory, ObsAct, Plan
+from android_world.agents.memory.procedural import ProceduralMemory
 from android_world.agents.memory.task_state import (
     TaskState,
     extract_app_from_elements,
@@ -111,8 +112,10 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
              on task completion.
   U3 (--u3): environment knowledge — PG-Agent page-graph guidelines retrieved
              from AutoDL RAG (RAG_URL) and injected into each action prompt.
+  U4 (--u4): procedural skill memory — reusable parameterized skills mined
+             from successful trajectories and injected as skill hints.
 
-  U1/U2/U3 are independent boolean flags for ablation.
+  U1/U2/U3/U4 are independent boolean flags for ablation.
   """
 
   def __init__(
@@ -122,8 +125,10 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       enable_u1: bool = False,
       enable_u2: bool = False,
       enable_u3: bool = False,
+      enable_u4: bool = False,
       u2_persistence_dir: str = "",
       u3_persistence_dir: str = "",
+      u4_persistence_dir: str = "",
       rag_url: str | None = None,
       name: str = "MemoryAugmentedAgent",
       wait_after_action_seconds: float = 2.0,
@@ -133,16 +138,20 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self.enable_u1 = enable_u1
     self.enable_u2 = enable_u2
     self.enable_u3 = enable_u3
+    self.enable_u4 = enable_u4
     self.screenshot_scale = screenshot_scale
 
     # ── Memory state (pure data) ──
     self.u1: TaskState | None = None
     self.u2: EpisodicMemory | None = None
     self.u3: EnvKnowledge | None = None
+    self.u4: ProceduralMemory | None = None
     if enable_u2:
       self.u2 = EpisodicMemory(persistence_dir=u2_persistence_dir)
     if enable_u3:
       self.u3 = EnvKnowledge(rag_url=rag_url, persist_dir=u3_persistence_dir)
+    if enable_u4:
+      self.u4 = ProceduralMemory(persistence_dir=u4_persistence_dir)
     # Goal buffered by _on_task_done/flush_memory; written by set_episode_success
     self._pending_trajectory_goal: str | None = None
 
@@ -196,6 +205,13 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       )
       if u3_text:
         memory_blocks.append(f"## Environment Knowledge (U3)\n{u3_text}")
+
+    if self.enable_u4 and self.u4 is not None:
+      app = self.u1.current_app if self.u1 is not None else ""
+      page = self.u1.current_page if self.u1 is not None else ""
+      u4_text = self.u4.retrieve_hint(goal, precondition=page)
+      if u4_text:
+        memory_blocks.append(f"## Procedural Skill (U4)\n{u4_text}")
 
     # Prepend memory blocks to the goal so they appear before the history
     # in the parent's prompt template.  This avoids any format-string issues
@@ -279,18 +295,24 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
   # ── Public: called by suite_utils after computing true task success ──
 
   def set_episode_success(self, success: bool) -> None:
-    """Finalize the current episode's U2 memory with the true outcome.
+    """Finalize the current episode's memory with the true outcome.
 
     Called by the evaluator after it computes task.is_successful().  Overrides
     the agent's own completion claim (which can be wrong) with ground truth.
+
+    U2: feeds the global failure rate and flushes the trajectory.
+    U4: successful episodes buffer their trajectory for skill mining; failed
+        episodes drive score eviction.
     """
-    if not self.enable_u2 or self.u2 is None:
-      return
-    # Feed the global failure rate before flushing the trajectory.
-    self.u2.record_episode_outcome(success)
-    goal = self._pending_trajectory_goal
-    self._pending_trajectory_goal = None
-    self._flush_u2_trajectory(goal, {}, success=success)
+    if self.enable_u2 and self.u2 is not None:
+      # Feed the global failure rate before flushing the trajectory.
+      self.u2.record_episode_outcome(success)
+      goal = self._pending_trajectory_goal
+      self._pending_trajectory_goal = None
+      self._flush_u2_trajectory(goal, {}, success=success)
+
+    if self.enable_u4 and self.u4 is not None:
+      self._flush_u4_trajectory(success)
 
   # ── Public: called by episode_runner when max_steps is reached ──────
 
@@ -359,6 +381,55 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     if len(trajectory) > 1:
       self.u2.add_trajectory(goal, trajectory)
       self.u2.finalize_task(goal, success=success)
+
+  def _flush_u4_trajectory(self, success: bool) -> None:
+    """Feed the finished episode's trajectory into U4 (ground-truth outcome).
+
+    Successful episodes buffer their actions for later skill mining
+    (write side).  Failed episodes update the score of any skill that was
+    matched during the episode (feedback side).  The trajectory is read from
+    the agent's own history — never from U2 — so U4 is an independent
+    ablation flag.
+
+    Each action is enriched with the semantic label of the UI element it
+    acted on (resolved from that step's `before_ui_elements` via the action's
+    index), so mined skills carry real targets instead of empty ones.  The
+    precondition is the screen of the FIRST step (where the skill starts),
+    not the final screen of the completed task.
+    """
+    goal = self._current_goal if hasattr(self, "_current_goal") else ""
+    if not goal:
+      return
+
+    actions: list = []
+    for h in self.history:
+      action = h.get("action_output_json")
+      if action is None or h.get("u2_replayed"):
+        continue
+      # Bind the semantic label of the element this action targets.
+      ui_elements = h.get("before_ui_elements", [])
+      index = getattr(action, "index", None)
+      if index is not None and isinstance(ui_elements, list) and 0 <= index < len(ui_elements):
+        try:
+          action._semantic_target = _describe_element(ui_elements, index)
+        except Exception:  # pylint: disable=broad-exception-caught
+          pass
+      actions.append(action)
+
+    if not actions:
+      return
+
+    if success:
+      # Precondition = the screen where the skill starts (first step's page).
+      first_elements = self.history[0].get("before_ui_elements", []) if self.history else []
+      first_app, first_page = extract_app_from_elements(first_elements)
+      precondition = first_page or first_app
+      self.u4.add_successful_trajectory(goal, actions, precondition=precondition)
+      # Mine when a mine batch boundary is crossed (default: after every
+      # successful episode, since mining is cheap and deterministic).
+      self.u4.mine()
+    else:
+      self.u4.record_outcome(goal, success=False)
 
   # ── U2 deterministic replay (§3.2.2) ──────────────────────────────
 

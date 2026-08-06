@@ -1,0 +1,105 @@
+{
+  "run_id": "RECOVERED_20260731_225525",
+  "phase": "u1",
+  "note": "从对话记录恢复，原始 run_time/episode_length 已丢失，仅保留每任务 is_successful",
+  "saved_at": "2026-08-03 (recovered from conversation)",
+  "total": 19,
+  "success": 5,
+  "episodes": [
+    {
+      "task_template": "BrowserMultiply",
+      "goal": "",
+      "is_successful": 1.0
+    },
+    {
+      "task_template": "ExpenseAddMultipleFromGallery",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "ExpenseAddMultipleFromMarkor",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "ExpenseDeleteMultiple2",
+      "goal": "",
+      "is_successful": 1.0
+    },
+    {
+      "task_template": "MarkorCreateNoteAndSms",
+      "goal": "",
+      "is_successful": 0.5
+    },
+    {
+      "task_template": "MarkorMergeNotes",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "MarkorTranscribeVideo",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "OsmAndMarker",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "OsmAndTrack",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "RecipeAddMultipleRecipesFromImage",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "RecipeAddMultipleRecipesFromMarkor",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "RecipeAddMultipleRecipesFromMarkor2",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "RecipeDeleteMultipleRecipesWithConstraint",
+      "goal": "",
+      "is_successful": 1.0
+    },
+    {
+      "task_template": "RetroSavePlaylist",
+      "goal": "",
+      "is_successful": 1.0
+    },
+    {
+      "task_template": "SaveCopyOfReceiptTaskEval",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "SimpleCalendarAddOneEvent",
+      "goal": "",
+      "is_successful": 1.0
+    },
+    {
+      "task_template": "SportsTrackerActivitiesOnDate",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "SportsTrackerTotalDistanceForCategoryOverInterval",
+      "goal": "",
+      "is_successful": 0.0
+    },
+    {
+      "task_template": "SportsTrackerTotalDurationForCategoryThisWeek",
+      "goal": "",
+      "is_successful": 0.0
+    }
+  ]
+}

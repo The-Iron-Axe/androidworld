@@ -1,0 +1,142 @@
+{
+  "run_id": "20260804_135016",
+  "phase": "u1u2_verify",
+  "saved_at": "2026-08-05 11:01:29",
+  "total": 19,
+  "success": 5,
+  "episodes": [
+    {
+      "task_template": "BrowserMultiply",
+      "goal": "Open the file task.html in Downloads in the file manager; when prompted open it with Chrome. Then click the button 5 times, remember the numbers displayed, and enter their product in the form.",
+      "is_successful": 1.0,
+      "episode_length": 19,
+      "run_time": 524.4797918796539
+    },
+    {
+      "task_template": "ExpenseAddMultipleFromGallery",
+      "goal": "Add the expenses from expenses.jpg in Simple Gallery Pro to pro expense.",
+      "is_successful": 0.0,
+      "episode_length": 9,
+      "run_time": 231.28735852241516
+    },
+    {
+      "task_template": "ExpenseAddMultipleFromMarkor",
+      "goal": "Go through the transactions in my_expenses.txt in Markor. Log the reimbursable transactions in the pro expense.",
+      "is_successful": 0.0,
+      "episode_length": 20,
+      "run_time": 1025.260038614273
+    },
+    {
+      "task_template": "ExpenseDeleteMultiple2",
+      "goal": "Delete the following expenses from pro expense: Ride-Sharing, Food Delivery, Doctor Visits.",
+      "is_successful": 1.0,
+      "episode_length": 16,
+      "run_time": 657.9198784828186
+    },
+    {
+      "task_template": "MarkorCreateNoteAndSms",
+      "goal": "Create a new note in Markor named 2023_02_17_eager_quilt.md with the following text: Better late than never.. Share the entire content of the note with the phone number +12262037385 via SMS using Simple SMS Messenger",
+      "is_successful": 0.0,
+      "episode_length": 18,
+      "run_time": 1245.0780265331268
+    },
+    {
+      "task_template": "MarkorMergeNotes",
+      "goal": "Merge the contents of Markor notes real_fox_VXci.md, 2023_10_05_lively_wolf.txt and 2023_04_04_helpful_pig.txt (in the same order) into a new Markor note named rNFETgdE and save it. Add a new line between the content of each note.",
+      "is_successful": 0.0,
+      "episode_length": 36,
+      "run_time": 1757.4436514377594
+    },
+    {
+      "task_template": "MarkorTranscribeVideo",
+      "goal": "Transcribe the contents of video episode_2_4K_oC39.mp4 by watching it in VLC player (located in Download) and writing the sequence of strings shown on each frame to the text file episode_2_4K_oC39_transcription.txt in Markor as a comma separated list. For example, if the first frame shows the text \"edna\" and the second frame shows the text \"pineapple\", then the text file should contain only the following text: \"edna, pineapple\".",
+      "is_successful": 0.0,
+      "episode_length": 20,
+      "run_time": 732.8515934944153
+    },
+    {
+      "task_template": "OsmAndMarker",
+      "goal": "Add a location marker for 47.1303814, 9.5930117 in the OsmAnd maps app.",
+      "is_successful": 0.0,
+      "episode_length": 12,
+      "run_time": 608.9539952278137
+    },
+    {
+      "task_template": "OsmAndTrack",
+      "goal": "Save a track with waypoints Planken, Liechtenstein, Nendeln, Liechtenstein, Schaanwald, Liechtenstein, Bendern, Liechtenstein in the OsmAnd maps app in the same order as listed.",
+      "is_successful": 0.0,
+      "episode_length": 26,
+      "run_time": 1121.2416932582855
+    },
+    {
+      "task_template": "RecipeAddMultipleRecipesFromImage",
+      "goal": "Add the recipes from recipes.jpg in Simple Gallery Pro to the Broccoli recipe app.",
+      "is_successful": 0.0,
+      "episode_length": 19,
+      "run_time": 665.5972125530243
+    },
+    {
+      "task_template": "RecipeAddMultipleRecipesFromMarkor",
+      "goal": "Add the recipes from recipes.txt in Markor to the Broccoli recipe app.",
+      "is_successful": 0.0,
+      "episode_length": 14,
+      "run_time": 600.9954209327698
+    },
+    {
+      "task_template": "RecipeAddMultipleRecipesFromMarkor2",
+      "goal": "Add the recipes from recipes.txt in Markor that take 45 mins to prepare into the Broccoli recipe app.",
+      "is_successful": 0.0,
+      "episode_length": 31,
+      "run_time": 1094.6533572673798
+    },
+    {
+      "task_template": "RecipeDeleteMultipleRecipesWithConstraint",
+      "goal": "Delete the recipes from Broccoli app that use pomegranate molasses in the directions.",
+      "is_successful": 1.0,
+      "episode_length": 6,
+      "run_time": 174.58855986595154
+    },
+    {
+      "task_template": "RetroSavePlaylist",
+      "goal": "Create a playlist in Retro Music titled \"Electronic Waves 203\" with the following songs, in order: Heartbeat Away, Falling Feathers, Dreamer's Awake. Then export the playlist to the Downloads directory on the device.",
+      "is_successful": 1.0,
+      "episode_length": 20,
+      "run_time": 560.8930292129517
+    },
+    {
+      "task_template": "SaveCopyOfReceiptTaskEval",
+      "goal": "In Simple Gallery Pro, copy receipt_good_pig_2023_08_11.jpg in DCIM and save a copy with the same name in Download",
+      "is_successful": 0.0,
+      "episode_length": 16,
+      "run_time": 478.78882789611816
+    },
+    {
+      "task_template": "SimpleCalendarAddOneEvent",
+      "goal": "In Simple Calendar Pro, create a calendar event on 2023-10-25 at 7h with the title 'Catch up on Budget Planning' and the description 'We will organize contract details.'. The event should last for 15 mins.",
+      "is_successful": 1.0,
+      "episode_length": 20,
+      "run_time": 491.7437753677368
+    },
+    {
+      "task_template": "SportsTrackerActivitiesOnDate",
+      "goal": "What activities did I do Wednesday in the OpenTracks app? Answer with the activity type only. If there are multiple types, format your answer in a comma separated list.",
+      "is_successful": 0.0,
+      "episode_length": 20,
+      "run_time": 549.3212180137634
+    },
+    {
+      "task_template": "SportsTrackerTotalDistanceForCategoryOverInterval",
+      "goal": "What was the total distance covered for sailing activities in the OpenTracks app from October 06 to Tuesday? Express your answer as a single number in meters rounded to the nearest integer.",
+      "is_successful": 0.0,
+      "episode_length": 3,
+      "run_time": 74.55827689170837
+    },
+    {
+      "task_template": "SportsTrackerTotalDurationForCategoryThisWeek",
+      "goal": "What was the total duration of skate boarding activities in the OpenTracks app this week? Assume the week starts from Monday. Express your answer in minutes as a single integer.",
+      "is_successful": 0.0,
+      "episode_length": 6,
+      "run_time": 185.27312564849854
+    }
+  ]
+}

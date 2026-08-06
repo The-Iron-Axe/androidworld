@@ -1,0 +1,16 @@
+{
+  "run_id": "20260803_211115",
+  "phase": "u1u2u3",
+  "saved_at": "2026-08-03 21:12:48",
+  "total": 1,
+  "success": 0,
+  "episodes": [
+    {
+      "task_template": "SimpleCalendarAddOneEvent",
+      "goal": "In Simple Calendar Pro, create a calendar event on 2023-10-25 at 7h with the title 'Catch up on Budget Planning' and the description 'We will organize contract details.'. The event should last for 15 mins.",
+      "is_successful": NaN,
+      "episode_length": NaN,
+      "run_time": 53.962478160858154
+    }
+  ]
+}
