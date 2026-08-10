@@ -223,13 +223,16 @@ class ProceduralMemory:
       self,
       goal: str,
       success: bool,
+      strength: float = 1.0,
   ) -> None:
     """Update the best-matching skill's score from a real execution outcome.
 
-    On success: score += 1; on failure: score -= 1.  Evict a skill whose
-    score drops to <= 0 (ProcMEM gain-based pruning).  The best-matching
-    skill of EITHER kind is updated — a negative skill that gets followed
-    and still fails should be penalized just like a positive one.
+    On success: score += strength; on failure: score -= strength.  `strength`
+    in [0,1] lets the caller weight the credit by execution quality (e.g. the
+    multi-agent Action Verifier pass rate), defaulting to full credit.  Evict
+    a skill whose score drops to <= 0 (ProcMEM gain-based pruning).  The
+    best-matching skill of EITHER kind is updated — a negative skill that gets
+    followed and still fails should be penalized just like a positive one.
     """
     skills = self.library.all()
     if not skills:
@@ -241,10 +244,10 @@ class ProceduralMemory:
       return
     if success:
       best.successes += 1
-      best.score += 1.0
+      best.score += strength
     else:
       best.failures += 1
-      best.score -= 1.0
+      best.score -= strength
     if best.score <= 0.0:
       self.library.remove(best.goal_hint, best.kind)
     else:

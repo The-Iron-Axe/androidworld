@@ -219,8 +219,7 @@ def _parse_plan_output(
     subgoals = [output.strip()]  # degenerate fallback: whole goal as one subgoal
   if not conditions:
     conditions = [(f"P{i+1}", f"task {g}") for i, g in enumerate(subgoals)]
-  if not checklist:
-    checklist = [AcceptanceItem(item_id="A1", object="task", expected="complete")]
+  # No synthetic ACCEPTANCE: empty checklist → Evidence Certifier fail-closed.
   return subgoals, conditions, checklist
 
 
@@ -284,6 +283,7 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     self._replan_count = 0
     self._step_verdicts: list[Any] = []
     self._claims: list[ActionClaim] = []
+    self._last_reflector_feedback = ""
 
   # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -296,6 +296,7 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       self._replan_count = 0
       self._step_verdicts = []
       self._claims = []
+      self._last_reflector_feedback = ""
     super().reset(go_home_on_reset)
 
   # ── Planner ───────────────────────────────────────────────────────────
@@ -332,11 +333,12 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
           current_subgoal=subgoals[0] if subgoals else "",
       )
 
-  def _planner_replan(self, goal: str) -> None:
-    """Re-plan the remaining subgoals after a stall, with a hard cap."""
-    if self._replan_count >= MAX_REPLANS:
+  def _planner_replan(self, goal: str, *, against_cap: bool = True) -> None:
+    """Re-plan remaining subgoals. Stall-driven calls count against MAX_REPLANS;
+    Evidence Certifier vetoes pass against_cap=False so they don't burn the budget.
+    """
+    if against_cap and self._replan_count >= MAX_REPLANS:
       return
-    self._replan_count += 1
     stalled = self._current_subgoal()
     state = self._planner_state
     satisfied = state.ledger.satisfied if state else set()
@@ -356,8 +358,12 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     state.subgoals = subgoals
     state.current_idx = 0
     state.ledger.conditions = conditions
-    state.checklist = checklist
+    # Drop prior satisfied ids — new condition texts/ids must not inherit orphans.
+    state.ledger.satisfied = set()
     state.ledger.recompute_signature()
+    state.checklist = checklist
+    if against_cap:
+      self._replan_count += 1
     if self.enable_u1 and self.u1 is not None:
       update_task_state(
           self.u1,
@@ -407,7 +413,35 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       lines.append(
           "Progress satisfied: " + ", ".join(sorted(state.ledger.satisfied))
       )
+    if self._last_reflector_feedback:
+      lines.append(f"## Verifier Feedback\n{self._last_reflector_feedback}")
     return "\n".join(lines)
+
+  # ── Completion gate: Evidence Certifier can veto status/complete ─────
+
+  def _accept_task_done(self, goal: str, step_data: dict[str, Any]) -> bool:
+    if not self._multiagent:
+      return True
+    ok = self._certify_global(goal, step_data)
+    self._certified = ok
+    if ok:
+      self._last_reflector_feedback = ""
+      return True
+    gaps = ""
+    if self._cert_report is not None:
+      gaps = ", ".join(
+          f"{k}={v}" for k, v in getattr(self._cert_report, "results", {}).items()
+          if v != "PASS"
+      )
+    self._last_reflector_feedback = (
+        "Completion rejected by Evidence Certifier"
+        + (f": {gaps}" if gaps else "")
+        + ". Fix missing acceptance items."
+    )
+    _log(f"[EC] veto completion | {self._last_reflector_feedback}")
+    # Veto replan must not consume the stall MAX_REPLANS budget.
+    self._planner_replan(goal, against_cap=False)
+    return False
 
   # ── Step-complete hook: Action Verifier → U3 gate, Progress Auditor → U1 ─
 
@@ -420,10 +454,11 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     if step_data.get("u2_replayed"):
       return
 
-    # (2) Action Verifier → gate U3 edge drawing + record U4 step credit.
+    # (2) Action Verifier → gate U3 edge drawing + Executor feedback on miss.
     verdict = self._verify_step_action(step_data)
     self._step_verdicts.append(verdict)
     self._apply_u3_gate(step_data, verdict)
+    self._apply_av_feedback(verdict)
 
     # (3) Progress Auditor → advance U1.completed only if the subgoal-level
     #     Evidence Certifier also passes (ordering: ADVANCING → certify).
@@ -431,6 +466,20 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
 
     # (4) Replicate super()'s U1 bookkeeping (app/page/last_action).
     self._update_u1_bookkeeping(step_data)
+
+  def _apply_av_feedback(self, verdict: Any) -> None:
+    """Feed non-CORRECT AV outcomes to the Executor. Stall counting is PA-owned."""
+    if getattr(verdict, "verdict", "") == "CORRECT":
+      # Clear AV-sourced feedback; keep cert veto text until next plan format.
+      if self._last_reflector_feedback.startswith("Action Verifier"):
+        self._last_reflector_feedback = ""
+      return
+    evidence = getattr(verdict, "evidence", "") or ""
+    self._last_reflector_feedback = (
+        f"Action Verifier: {verdict.verdict}"
+        + (f" — {evidence}" if evidence else "")
+    )
+    _log(f"[AV] feedback | {self._last_reflector_feedback}")
 
   def _verify_step_action(self, step_data: dict[str, Any]) -> Any:
     action = step_data.get("action_output_json")
@@ -479,8 +528,13 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     )
 
   def _apply_u3_gate(self, step_data: dict[str, Any], verdict: Any) -> None:
-    """Only CORRECT transitions draw U3 page-graph edges."""
+    """Only CORRECT *UI* transitions draw U3 page-graph edges."""
     if not self.enable_u3 or self.u3 is None:
+      return
+    action = step_data.get("action_output_json")
+    action_type = getattr(action, "action_type", "")
+    if action_type not in UI_ACTION_TYPES:
+      _log(f"[U3] skip edge draw (non-UI action {action_type!r})")
       return
     if verdict.verdict != "CORRECT":
       _log(f"[U3] skip edge draw ({verdict.verdict} — not CORRECT)")
@@ -490,7 +544,6 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     after_elements = step_data.get("after_ui_elements", [])
     before_list = step_data.get("before_ui_elements_list", "")
     after_list = step_data.get("after_ui_elements_list", "")
-    action = step_data.get("action_output_json")
     before_app, before_page = extract_app_from_elements(before_elements)
     after_app, after_page = extract_app_from_elements(after_elements)
     goal = getattr(self, "_current_goal", "")
@@ -524,11 +577,11 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     if pv.verdict == "ADVANCING":
       self._stall_steps = 0
       new_satisfied = pv.new_satisfied
-      if new_satisfied:
-        state.ledger.satisfied.update(new_satisfied)
-        state.ledger.recompute_signature()
-      # Subgoal-level certification gates the ledger advance.
+      # Ordering (appendix): ADVANCING → Evidence(子目标) → only then ledger/subgoal.
       if self._certify_current_subgoal(step_data):
+        if new_satisfied:
+          state.ledger.satisfied.update(new_satisfied)
+          state.ledger.recompute_signature()
         self._advance_subgoal()
       else:
         _log(f"[PA] ADVANCING but subgoal certifier FAILED — not advancing")
@@ -605,23 +658,35 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
         failure=False,
     )
 
-  # ── Task-done hook: global Evidence Certifier → _certified ────────────
+  # ── Task-done hook: U2 buffer only (cert already ran in _accept_task_done)
 
   def _on_task_done(self, goal: str, step_data: dict[str, Any]) -> None:
     if not self._multiagent:
       super()._on_task_done(goal, step_data)
       return
-    super()._on_task_done(goal, step_data)  # U2 buffer unchanged
-    self._certified = self._certify_global(goal, step_data)
+    action = step_data.get("action_output_json")
+    # infeasible: abandon without Evidence Certifier; leave _certified=None so
+    # set_episode_success uses ground truth alone.
+    if getattr(action, "goal_status", "") == "infeasible":
+      super()._on_task_done(goal, step_data)
+      return
+    # Certification already set _certified in _accept_task_done for complete.
+    if self._certified is None:
+      self._certified = self._certify_global(goal, step_data)
+    super()._on_task_done(goal, step_data)  # U2 buffer
 
   def _certify_global(self, goal: str, step_data: dict[str, Any]) -> bool:
     state = self._planner_state
+    after_ui = step_data.get("after_ui_elements", [])
+    # No acceptance criteria ⇒ cannot falsify, so pass through to ground truth.
+    # (Failing here would make a planner-parse-failure loop: empty checklist →
+    # veto → replan → empty checklist again, forever.)
     if state is None or not state.checklist:
-      return True  # no checklist -> nothing to certify (degenerate)
+      return True
     result = mav.certify_evidence(
         goal=goal,
         checklist=state.checklist,
-        final_elements=step_data.get("after_ui_elements", []),
+        final_elements=after_ui,
         llm=self.llm,
         final_image=step_data.get("after_screenshot_with_som"),
     )
@@ -634,8 +699,10 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     if not self._multiagent:
       super().flush_memory(goal)
       return
-    if self._certified is None:
-      # Agent never declared done; certify against the last known state.
+    # Max-steps (or any non-accepted end): always re-certify against the last
+    # known state.  A prior completion veto leaves _certified=False; that must
+    # not permanently block GT fusion / U2-U4 writes.
+    if self._certified is not True:
       self._certified = self._certify_global_from_history(goal)
     super().flush_memory(goal)
 
@@ -669,17 +736,32 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     A successful episode is always buffered for positive-skill mining; a failed
     episode is buffered for negative-skill mining AND score-penalizes any
     matched skill (both handled by the parent).  The per-step Action Verifier
-    verdicts (`_step_verdicts`) are still recorded and are available to
-    callers, but they no longer gate skill mining — any ground-truth success
-    feeds U4, so skills can accumulate even when individual steps weren't all
-    CORRECT.
+    verdicts (`_step_verdicts`) ARE used: the episode's AV pass rate becomes
+    the U4 score-credit weight (design §7.4 step-level credit).  A successful
+    episode whose steps were mostly CORRECT adds more to the matched skill's
+    score than one whose steps were MISGROUNDED/NO_EFFECT — the weight is the
+    CORRECT fraction, floored at 0.5 so a single flawed step cannot zero out
+    the credit of an otherwise-good episode.
     """
     if not self._multiagent:
       super()._flush_u4_trajectory(success)
       return
     if not self.enable_u4 or self.u4 is None:
       return
+    self._u4_strength = self._av_pass_rate()
     super()._flush_u4_trajectory(success)
+
+  def _av_pass_rate(self) -> float:
+    """Fraction of Action Verifier verdicts that were CORRECT, floored at 0.5.
+
+    No verdicts (episodes with only non-UI actions, or no UI steps) ⇒ 1.0
+    (no AV signal → full credit).  Floored at 0.5 so a single misstep in an
+    otherwise-successful episode does not collapse the whole credit to 0.
+    """
+    if not self._step_verdicts:
+      return 1.0
+    correct = sum(1 for v in self._step_verdicts if v.verdict == "CORRECT")
+    return max(0.5, correct / len(self._step_verdicts))
 
 
 class _NullClaim:

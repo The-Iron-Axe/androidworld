@@ -163,12 +163,13 @@ _U2_PERSISTENCE_DIR = flags.DEFINE_string(
 _U3_PERSISTENCE_DIR = flags.DEFINE_string(
     'u3_persistence_dir',
     '',
-    'Directory for U3 page-graph persistence. If empty, the local page graph is not persisted across runs.',
+    'Ignored (deprecated). U3 is AutoDL-only; there is no local page-graph store.',
 )
 _U3 = flags.DEFINE_boolean(
     'u3',
     False,
-    'Enable U3 environment knowledge (PG-Agent page-graph RAG via RAG_URL).',
+    'Enable U3 environment knowledge (AutoDL page-graph RAG; requires '
+    '--rag_url or RAG_URL, default http://127.0.0.1:18180).',
 )
 _U4 = flags.DEFINE_boolean(
     'u4',
@@ -183,7 +184,7 @@ _U4_PERSISTENCE_DIR = flags.DEFINE_string(
 _RAG_URL = flags.DEFINE_string(
     'rag_url',
     '',
-    'U3 RAG service URL. Empty = use env RAG_URL or http://127.0.0.1:18180.',
+    'U3 AutoDL RAG URL. Empty = env RAG_URL, else http://127.0.0.1:18180 when --u3.',
 )
 
 _MULTIAGENT = flags.DEFINE_boolean(
@@ -269,35 +270,36 @@ def _get_agent(
     )
   # Memory-augmented agent with orthogonal U1/U2/U3 flags.
   elif _AGENT_NAME.value == 'm3a_qwen3_vl_32b_mem':
+    rag_url = ''
+    if _U3.value:
+      rag_url = (
+          _RAG_URL.value
+          or os.environ.get('RAG_URL', 'http://127.0.0.1:18180')
+      ).strip()
+      if not rag_url:
+        raise ValueError(
+            'U3 is enabled but rag_url is empty. Set --rag_url or RAG_URL '
+            '(AutoDL tunnel). Local page-graph fallback is disabled.'
+        )
+    agent_kwargs = dict(
+        env=env,
+        llm=infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
+        enable_u1=_U1.value,
+        enable_u2=_U2.value,
+        enable_u3=_U3.value,
+        enable_u4=_U4.value,
+        u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
+        u3_persistence_dir=_U3_PERSISTENCE_DIR.value,  # ignored; AutoDL-only
+        u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
+        rag_url=rag_url,
+        screenshot_scale=_SCREENSHOT_SCALE.value,
+    )
     if _MULTIAGENT.value:
       agent = multi_agent.MultiAgentReflectorAgent(
-          env,
-          infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
-          enable_multiagent=True,
-          enable_u1=_U1.value,
-          enable_u2=_U2.value,
-          enable_u3=_U3.value,
-          enable_u4=_U4.value,
-          u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
-          u3_persistence_dir=_U3_PERSISTENCE_DIR.value,
-          u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
-          rag_url=_RAG_URL.value or None,
-          screenshot_scale=_SCREENSHOT_SCALE.value,
+          enable_multiagent=True, **agent_kwargs
       )
     else:
-      agent = memory_agent.MemoryAugmentedAgent(
-          env,
-          infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
-          enable_u1=_U1.value,
-          enable_u2=_U2.value,
-          enable_u3=_U3.value,
-          enable_u4=_U4.value,
-          u2_persistence_dir=_U2_PERSISTENCE_DIR.value,
-          u3_persistence_dir=_U3_PERSISTENCE_DIR.value,
-          u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
-          rag_url=_RAG_URL.value or None,
-          screenshot_scale=_SCREENSHOT_SCALE.value,
-      )
+      agent = memory_agent.MemoryAugmentedAgent(**agent_kwargs)
   # SeeAct.
   elif _AGENT_NAME.value == 'seeact':
     agent = seeact.SeeAct(env)

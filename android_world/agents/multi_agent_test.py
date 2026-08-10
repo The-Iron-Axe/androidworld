@@ -79,10 +79,10 @@ class ActionVerifierTest(absltest.TestCase):
     self.assertEqual(v.verdict, "NO_EFFECT")
 
   def test_llm_failure_defaults_to_no_effect(self):
-    llm = _MockLlm([])  # predict_mm returns "NO_RESPONSE" -> parse fails -> CORRECT default
+    llm = _MockLlm([])  # predict_mm returns "NO_RESPONSE" -> parse fails -> NO_EFFECT
     v = mav.verify_action(
         _FakeClaim(intent="x", expected_effect="y"), "click", "t", [], [], llm)
-    self.assertEqual(v.verdict, "CORRECT")
+    self.assertEqual(v.verdict, "NO_EFFECT")
 
   def test_llm_exception_returns_no_effect(self):
     class _RaisingLlm(_MockLlm):
@@ -100,6 +100,19 @@ class ActionVerifierTest(absltest.TestCase):
     v = mav.verify_action(
         _FakeClaim(intent="x", expected_effect="y"), "click", "t", [], [], llm)
     self.assertEqual(v.verdict, "CORRECT")
+
+
+class PlanParseTest(absltest.TestCase):
+
+  def test_missing_acceptance_leaves_empty_checklist(self):
+    # Fail-closed: do NOT invent A1:task=complete when ACCEPTANCE is absent.
+    subgoals, conditions, checklist = ma._parse_plan_output(
+        "SUBGOALS:\n1. open app\n2. finish\n"
+        "PROGRESS_CONDITIONS:\nP1: app open\n"
+    )
+    self.assertEqual(subgoals, ["open app", "finish"])
+    self.assertEqual(conditions[0][0], "P1")
+    self.assertEqual(checklist, [])
 
 
 class ProgressAuditorTest(absltest.TestCase):
@@ -359,9 +372,9 @@ class PlannerTest(absltest.TestCase, _AdbMockMixin):
         "SUBGOALS:\n1. open alarm app\n2. set time 07:00\n"
         "PROGRESS_CONDITIONS:\nP1: alarm app open\nP2: time is 07:00\n"
         "ACCEPTANCE:\nA1: alarm time: 07:00 [mandatory]",
-        # Action selection -> status complete.
-        "Reason: done.\nAction: {'action_type': 'status', 'goal_status':"
-        " 'complete'}",
+        # Action selection (non-complete so cert veto/replan does not rewrite plan).
+        "Reason: opening.\nAction: {'action_type': 'click', 'index': 0}",
+        "opened",
     ])
     agent = ma.MultiAgentReflectorAgent(
         env, llm, enable_multiagent=True, enable_u1=True)
@@ -381,9 +394,8 @@ class PlannerTest(absltest.TestCase, _AdbMockMixin):
         "SUBGOALS:\n1. do task\n2. verify\n"
         "PROGRESS_CONDITIONS:\nP1: done\n"
         "ACCEPTANCE:\nA1: task: done [mandatory]",
-        # Action selection -> status complete.
-        "Reason: done.\nAction: {'action_type': 'status', 'goal_status':"
-        " 'complete'}",
+        "Reason: go.\nAction: {'action_type': 'click', 'index': 0}",
+        "clicked",
     ])
     agent = ma.MultiAgentReflectorAgent(
         env, llm, enable_multiagent=True, enable_u1=True)
@@ -393,6 +405,90 @@ class PlannerTest(absltest.TestCase, _AdbMockMixin):
     agent.step("do task")
     self.assertIsNotNone(agent._planner_state)
     self.assertEqual(len(agent._planner_state.subgoals), 2)
+
+
+class CompletionVetoTest(absltest.TestCase, _AdbMockMixin):
+  """Evidence Certifier can reject status/complete so the episode continues."""
+
+  def setUp(self):
+    super().setUp()
+    self._start_adb_mocks()
+
+  def tearDown(self):
+    super().tearDown()
+    self._stop_adb_mocks()
+
+  def test_cert_fail_rejects_done(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _ScriptedLlm([
+        "SUBGOALS:\n1. do task\n"
+        "PROGRESS_CONDITIONS:\nP1: task done\n"
+        "ACCEPTANCE:\nA1: task: done [mandatory]",
+        "Reason: done.\nAction: {'action_type': 'status', 'goal_status':"
+        " 'complete'}",
+        # Evidence Certifier FAIL.
+        "ITEM A1: FAIL\nEVIDENCE: missing.\nOVERALL: FAIL",
+        # Replan after veto.
+        "SUBGOALS:\n1. fix task\n"
+        "PROGRESS_CONDITIONS:\nP1: task done\n"
+        "ACCEPTANCE:\nA1: task: done [mandatory]",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_u1=True)
+    result = agent.step("do something")
+    self.assertFalse(result.done)
+    self.assertFalse(agent._certified)
+    self.assertIn("Completion rejected", agent._last_reflector_feedback)
+    self.assertIsNotNone(result.data.get("after_ui_elements"))
+    # Rejected status must not advance subgoals via _on_step_complete.
+    self.assertEqual(agent._planner_state.current_idx, 0)
+
+  def test_cert_pass_allows_done(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _ScriptedLlm([
+        "SUBGOALS:\n1. do task\n"
+        "PROGRESS_CONDITIONS:\nP1: task done\n"
+        "ACCEPTANCE:\nA1: task: done [mandatory]",
+        "Reason: done.\nAction: {'action_type': 'status', 'goal_status':"
+        " 'complete'}",
+        "ITEM A1: PASS\nEVIDENCE: present.\nOVERALL: PASS",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_u1=True)
+    result = agent.step("do something")
+    self.assertTrue(result.done)
+    self.assertTrue(agent._certified)
+    self.assertIsNotNone(result.data.get("after_ui_elements"))
+
+  def test_infeasible_ends_without_cert(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _ScriptedLlm([
+        "SUBGOALS:\n1. do task\n"
+        "PROGRESS_CONDITIONS:\nP1: task done\n"
+        "ACCEPTANCE:\nA1: task: done [mandatory]",
+        "Reason: impossible.\nAction: {'action_type': 'status', "
+        "'goal_status': 'infeasible'}",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_u1=True)
+    result = agent.step("do something")
+    self.assertTrue(result.done)
+    self.assertIsNone(agent._certified)
+
+  def test_flush_recertifies_after_veto(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _ScriptedLlm([
+        "ITEM A1: PASS\nEVIDENCE: ok.\nOVERALL: PASS",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_u1=False)
+    agent._planner_state = ma.PlannerState(
+        checklist=[ma.AcceptanceItem("A1", "task", "done", True)],
+    )
+    agent.history = [{"after_ui_elements": [], "after_screenshot_with_som": None}]
+    agent._certified = False  # prior veto
+    agent.flush_memory("goal")
+    self.assertTrue(agent._certified)
 
 
 class FusionTest(absltest.TestCase, _AdbMockMixin):
@@ -476,6 +572,61 @@ class ReplanTest(absltest.TestCase, _AdbMockMixin):
       agent._audit_and_advance({})
     self.assertLessEqual(agent._replan_count, MAX_REPLANS)
 
+  def test_av_feedback_does_not_double_count_stall(self):
+    env = test_utils.FakeAsyncEnv()
+    agent = ma.MultiAgentReflectorAgent(
+        env, _ScriptedLlm([]), enable_multiagent=True, enable_u1=False)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["sg1"],
+        ledger=ma.ProgressLedger(conditions=[("P1", "app open")]),
+    )
+    from android_world.agents import multi_agent_verifier as mav
+    before = agent._stall_steps
+    agent._apply_av_feedback(mav.ActionVerdict("NO_EFFECT", "no change"))
+    self.assertEqual(agent._stall_steps, before)  # AV must not bump stall
+    self.assertIn("Action Verifier", agent._last_reflector_feedback)
+
+  def test_replan_clears_satisfied_ledger(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _ScriptedLlm([
+        "SUBGOALS:\n1. new sg\n"
+        "PROGRESS_CONDITIONS:\nP9: new cond\n"
+        "ACCEPTANCE:\nA1: x: y [mandatory]",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_u1=False)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["old"],
+        ledger=ma.ProgressLedger(
+            conditions=[("P1", "old")],
+            satisfied={"P1", "P_ORPHAN"},
+        ),
+    )
+    agent._planner_replan("goal")
+    self.assertEqual(agent._planner_state.ledger.satisfied, set())
+    self.assertEqual(agent._planner_state.ledger.conditions[0][0], "P9")
+
+  def test_cert_veto_replan_does_not_consume_cap(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _ScriptedLlm([
+        "SUBGOALS:\n1. fix\n"
+        "PROGRESS_CONDITIONS:\nP1: done\n"
+        "ACCEPTANCE:\nA1: task: done [mandatory]",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_u1=False)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["sg"],
+        checklist=[ma.AcceptanceItem("A1", "task", "done", True)],
+        ledger=ma.ProgressLedger(conditions=[("P1", "done")]),
+    )
+    agent._replan_count = MAX_REPLANS  # stall budget exhausted
+    agent._cert_report = type("R", (), {"results": {"A1": "FAIL"}})()
+    # Simulate veto path replan
+    agent._planner_replan("goal", against_cap=False)
+    self.assertEqual(agent._replan_count, MAX_REPLANS)  # unchanged
+    self.assertEqual(agent._planner_state.subgoals, ["fix"])
+
 
 class ProgressAuditorIntegrationTest(absltest.TestCase, _AdbMockMixin):
   """_audit_and_advance advances U1 only when ADVANCING is certified."""
@@ -503,9 +654,8 @@ class ProgressAuditorIntegrationTest(absltest.TestCase, _AdbMockMixin):
     agent = ma.MultiAgentReflectorAgent(
         env, llm, enable_multiagent=True, enable_u1=True)
     agent.step("open the app")
-    # No more LLM responses -> action verifier returns NO_EFFECT (default
-    # verdict via parse failure is CORRECT; progress auditor returns STALLED).
-    # U1 must NOT have advanced subgoal index.
+    # No more LLM responses -> action verifier defaults to NO_EFFECT;
+    # progress auditor returns STALLED. U1 must NOT have advanced subgoal index.
     self.assertEqual(agent._planner_state.current_idx, 0)
 
 

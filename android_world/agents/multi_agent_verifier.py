@@ -183,7 +183,8 @@ def verify_action(
   except Exception as e:  # pylint: disable=broad-exception-caught
     return ActionVerdict("NO_EFFECT", f"LLM call failed: {e}")
 
-  verdict = _parse_verdict_line(output, ACTION_VERDICTS)
+  # Fail-closed: unparseable / NO_RESPONSE must not draw U3 edges as CORRECT.
+  verdict = _parse_verdict_line(output, ACTION_VERDICTS, default="NO_EFFECT")
   evidence = _parse_evidence_line(output)
   _log(f"[AV] {action_type}({target}) -> {verdict} | {evidence}")
   return ActionVerdict(verdict, evidence)
@@ -340,11 +341,15 @@ def _parse_verdict_line(output: str, valid: tuple[str, ...],
                         default: str | None = None) -> str:
   """Extract the first VERDICT: line and validate against `valid`."""
   line = _find_line(output, "VERDICT")
-  if not line:
-    return default or valid[0]  # Safe default
-  m = re.search(r"(?:VERDICT:)?\s*([A-Z_]+)", line)
-  if m and m.group(1) in valid:
-    return m.group(1)
+  if line:
+    m = re.search(r"(?:VERDICT:)?\s*([A-Z_]+)", line)
+    if m and m.group(1) in valid:
+      return m.group(1)
+  # LLM sometimes omits the VERDICT: prefix but still emits a bare label
+  # (e.g. "CORRECT: everything fine"). Prefer an explicit token over default.
+  for token in valid:
+    if re.search(rf"\b{token}\b", output or ""):
+      return token
   return default or valid[0]
 
 

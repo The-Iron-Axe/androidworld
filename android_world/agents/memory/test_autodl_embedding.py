@@ -59,13 +59,14 @@ class EnvKnowledgeDefaultEmbedderTest(unittest.TestCase):
         with mock.patch(
             "android_world.agents.memory.environment.AutoDLEmbeddingBackend"
         ) as mock_backend, mock.patch(
-            "android_world.agents.memory.environment.PageGraph"
-        ) as mock_graph:
+            "android_world.agents.memory.environment.RagClient"
+        ):
             EnvKnowledge(rag_url="http://127.0.0.1:18180")
             mock_backend.assert_called_once_with(rag_url="http://127.0.0.1:18180")
-            mock_graph.assert_called_once()
-            args, kwargs = mock_graph.call_args
-            self.assertIs(kwargs.get("embedder"), mock_backend.return_value)
+
+    def test_empty_rag_url_raises(self):
+        with self.assertRaises(ValueError):
+            EnvKnowledge(rag_url="")
 
 
 if __name__ == "__main__":

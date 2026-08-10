@@ -178,59 +178,61 @@ class PageGraphRetrievalTest(unittest.TestCase):
             self.assertIn("tap marker", actions3)
 
 
-class EnvKnowledgeLocalGraphTest(unittest.TestCase):
+class EnvKnowledgeAutoDLTest(unittest.TestCase):
+    """U3 is AutoDL-only: no local page-graph fallback."""
 
-    def test_record_transition_then_retrieve(self):
-        with tempfile.TemporaryDirectory() as d:
-            ek = EnvKnowledge(rag_url="", persist_dir=d, embedder=FakeEmbedder())
-            ek.record_transition(
-                before_summary="Markor main screen",
-                action_summary="click new note",
-                task="Create a note",
-                after_summary="Markor editor screen",
-            )
-            # Query must share enough tokens with the stored page for the
-            # bag-of-words FakeEmbedder to clear the 0.5 hit threshold.  The
-            # summary is "Current screen: app=net.gsantner.markor. page=Markor
-            # main." (the goal is intentionally NOT embedded — task context
-            # lives on the edge, not the node).  The app token is mostly noise
-            # for this embedder, so the UI list is kept empty to avoid diluting
-            # similarity against the stored "Markor main screen".
-            hint = ek.retrieve_hint(
-                "",
-                current_app="net.gsantner.markor",
-                current_page="Markor main",
-            )
-            self.assertIn("click new note", hint)
+    def test_requires_rag_url(self):
+        with self.assertRaises(ValueError):
+            EnvKnowledge(rag_url="")
 
-    def test_persistence_round_trip_via_envknowledge(self):
-        with tempfile.TemporaryDirectory() as d:
-            ek1 = EnvKnowledge(rag_url="", persist_dir=d, embedder=FakeEmbedder())
-            ek1.record_transition(
-                before_summary="Markor main screen",
-                action_summary="click new note",
-                task="Create a note",
-                after_summary="Markor editor screen",
-            )
-            ek2 = EnvKnowledge(rag_url="", persist_dir=d, embedder=FakeEmbedder())
-            hint = ek2.retrieve_hint(
-                "",
-                current_app="net.gsantner.markor",
-                current_page="Markor main",
-            )
-            self.assertIn("click new note", hint)
+    def test_record_and_retrieve_via_client(self):
+        client = mock.Mock()
+        client.add_transition = mock.Mock()
+        client.retrieve = mock.Mock(return_value={
+            "guidelines": [{
+                "actions": ["click new note"],
+                "tasks": ["Create a note"],
+            }],
+        })
+        client.format_guidelines_for_prompt = mock.Mock(
+            return_value="click new note"
+        )
+        ek = EnvKnowledge(
+            rag_url="http://127.0.0.1:18180",
+            client=client,
+            embedder=FakeEmbedder(),
+        )
+        ek.record_transition(
+            before_summary="Markor main screen",
+            action_summary="click new note",
+            task="Create a note",
+            after_summary="Markor editor screen",
+        )
+        client.add_transition.assert_called_once()
+        hint = ek.retrieve_hint(
+            "ui text",
+            current_app="net.gsantner.markor",
+            current_page="Markor main",
+        )
+        self.assertIn("click new note", hint)
+        client.retrieve.assert_called_once()
 
-    def test_empty_graph_returns_empty(self):
-        with tempfile.TemporaryDirectory() as d:
-            ek = EnvKnowledge(rag_url="", persist_dir=d, embedder=FakeEmbedder())
-            hint = ek.retrieve_hint("ui", current_app="a")
-            self.assertEqual(hint, "")
+    def test_empty_summary_skips_retrieve(self):
+        client = mock.Mock()
+        ek = EnvKnowledge(
+            rag_url="http://127.0.0.1:18180",
+            client=client,
+            embedder=FakeEmbedder(),
+        )
+        hint = ek.retrieve_hint("")
+        self.assertEqual(hint, "")
+        client.retrieve.assert_not_called()
 
 
 class AgentU3FeedTest(unittest.TestCase):
-    """Verify MemoryAugmentedAgent._on_step_complete feeds U3 on success."""
+    """Single-agent U3 buffers transitions until episode GT success."""
 
-    def test_on_step_complete_feeds_u3(self):
+    def test_on_step_complete_buffers_u3(self):
         from android_world.agents.memory_agent import MemoryAugmentedAgent
 
         agent = MemoryAugmentedAgent.__new__(MemoryAugmentedAgent)
@@ -240,6 +242,7 @@ class AgentU3FeedTest(unittest.TestCase):
         agent.u1 = None
         agent.u2 = None
         agent._current_goal = "Create a note"
+        agent._pending_u3_transitions = []
         agent.u3 = mock.Mock()
         agent.u3.record_transition = mock.Mock()
 
@@ -257,14 +260,80 @@ class AgentU3FeedTest(unittest.TestCase):
             "action_output_json": mock.Mock(action_type="click", index=0),
         })
 
+        agent.u3.record_transition.assert_not_called()
+        self.assertEqual(len(agent._pending_u3_transitions), 1)
+        tr = agent._pending_u3_transitions[0]
+        self.assertEqual(tr["action_summary"], "clicked 'New note'")
+        self.assertEqual(tr["task"], "Create a note")
+        self.assertIn("New note", tr["before_summary"])
+        self.assertNotIn("Create a note", tr["before_summary"])
+        self.assertNotIn("Create a note", tr["after_summary"])
+
+    def test_flush_u3_only_on_success(self):
+        from android_world.agents.memory_agent import MemoryAugmentedAgent
+
+        agent = MemoryAugmentedAgent.__new__(MemoryAugmentedAgent)
+        agent.enable_u1 = False
+        agent.enable_u2 = False
+        agent.enable_u3 = True
+        agent.enable_u4 = False
+        agent.u2 = None
+        agent.u4 = None
+        agent.u3 = mock.Mock()
+        agent.u3.record_transition = mock.Mock()
+        agent._pending_trajectory_goal = None
+        agent._pending_u3_transitions = [{
+            "before_summary": "a",
+            "action_summary": "click",
+            "task": "g",
+            "after_summary": "b",
+            "before_app": "",
+            "after_app": "",
+        }]
+        agent.set_episode_success(False)
+        agent.u3.record_transition.assert_not_called()
+        self.assertEqual(agent._pending_u3_transitions, [])
+
+        agent._pending_u3_transitions = [{
+            "before_summary": "a",
+            "action_summary": "click",
+            "task": "g",
+            "after_summary": "b",
+            "before_app": "",
+            "after_app": "",
+        }]
+        agent.set_episode_success(True)
         agent.u3.record_transition.assert_called_once()
-        call = agent.u3.record_transition.call_args
-        self.assertEqual(call.kwargs.get("action_summary"), "clicked 'New note'")
-        self.assertEqual(call.kwargs.get("task"), "Create a note")
-        self.assertIn("New note", call.kwargs["before_summary"])
-        # Node summaries must NOT contain the task goal (cross-task merging).
-        self.assertNotIn("Create a note", call.kwargs["before_summary"])
-        self.assertNotIn("Create a note", call.kwargs["after_summary"])
+
+    def test_u3_flush_failure_does_not_block_u2(self):
+        from android_world.agents.memory_agent import MemoryAugmentedAgent
+
+        agent = MemoryAugmentedAgent.__new__(MemoryAugmentedAgent)
+        agent.enable_u1 = False
+        agent.enable_u2 = True
+        agent.enable_u3 = True
+        agent.enable_u4 = False
+        agent.u4 = None
+        agent.u2 = mock.Mock()
+        agent.u2.record_episode_outcome = mock.Mock()
+        agent._pending_trajectory_goal = "g"
+        agent._flush_u2_trajectory = mock.Mock()
+        agent.u3 = mock.Mock()
+        agent.u3.record_transition = mock.Mock(
+            side_effect=RuntimeError("autodl down")
+        )
+        agent._pending_u3_transitions = [{
+            "before_summary": "a",
+            "action_summary": "click",
+            "task": "g",
+            "after_summary": "b",
+            "before_app": "",
+            "after_app": "",
+        }]
+        agent.set_episode_success(True)
+        agent.u2.record_episode_outcome.assert_called_once_with(True)
+        agent._flush_u2_trajectory.assert_called_once()
+        self.assertEqual(agent._pending_u3_transitions, [])
 
     def test_build_screen_summary_excludes_goal(self):
         s = build_screen_summary(

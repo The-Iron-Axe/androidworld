@@ -93,7 +93,7 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string(
     'u3_store', os.path.join(_REPO_ROOT, 'u3_store'),
-    'Shared U3 page-graph store.',
+    'Ignored (deprecated). U3 is AutoDL-only; no local page-graph directory.',
 )
 flags.DEFINE_string(
     'u4_store', os.path.join(_REPO_ROOT, 'u4_store'),
@@ -102,8 +102,9 @@ flags.DEFINE_string(
 flags.DEFINE_bool(
     'rag_on',
     True,
-    'Enable U3 RAG (remote vector retrieval). On by default. Set --norag_on '
-    'to force local page-graph only.',
+    'Deprecated alias for enabling U3 remote RAG. U3 is AutoDL-only: '
+    '--norag_on disables U3 entirely (same as u3=False in configs). '
+    'Do not use for "local graph only".',
 )
 flags.DEFINE_list(
     'configs',
@@ -191,10 +192,24 @@ def _run_phase(
 
   agent_cls = (multi_agent.MultiAgentReflectorAgent if enable_multiagent
                else memory_agent.MemoryAugmentedAgent)
-  agent = agent_cls(
-      env,
-      infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
-      enable_multiagent=enable_multiagent,
+  # --norag_on ≡ disable U3 (AutoDL-only; no local graph mode).
+  if not FLAGS.rag_on and enable_u3:
+    print('WARNING: --norag_on with U3 requested — disabling U3 '
+          '(equivalent to closing U3; AutoDL is required when U3 is on).')
+    enable_u3 = False
+  rag_url = ''
+  if enable_u3:
+    rag_url = (
+        FLAGS.rag_url or os.environ.get('RAG_URL', 'http://127.0.0.1:18180')
+    ).strip()
+    if not rag_url:
+      raise ValueError(
+          'U3 is enabled but rag_url is empty. Set --rag_url or RAG_URL '
+          '(AutoDL tunnel). Local page-graph fallback is disabled.'
+      )
+  agent_kwargs = dict(
+      env=env,
+      llm=infer.Gpt4Wrapper('Qwen/Qwen3-VL-32B-Instruct'),
       enable_u1=enable_u1,
       enable_u2=enable_u2,
       enable_u3=enable_u3,
@@ -202,8 +217,11 @@ def _run_phase(
       u2_persistence_dir=FLAGS.u2_store,
       u3_persistence_dir=FLAGS.u3_store,
       u4_persistence_dir=FLAGS.u4_store,
-      rag_url=FLAGS.rag_url or os.environ.get('RAG_URL', 'http://127.0.0.1:18180'),
+      rag_url=rag_url,
   )
+  if enable_multiagent:
+    agent_kwargs['enable_multiagent'] = True
+  agent = agent_cls(**agent_kwargs)
   agent.name = agent_name
 
   ckpt_root = os.path.join(_REPO_ROOT, 'runs')
@@ -399,7 +417,7 @@ def main(argv):
   run_id = FLAGS.run_id.strip() or time.strftime('%Y%m%d_%H%M%S')
   _PROGRESS_DATA['run_id'] = run_id
   print(f'Run ID: {run_id}')
-  print(f'U3 RAG: {"on" if FLAGS.rag_on else "off (local graph only)"}')
+  print(f'U3 RAG: {"on" if FLAGS.rag_on else "off (--norag_on ≡ disable U3)"}')
 
   # By design the accumulation and verification task sets are the same by
   # default (eval tasks need prior experience in the store).  Warn only if a
@@ -458,7 +476,7 @@ def main(argv):
       suite = build_suite(s, record_tasks)
       _run_phase_and_save(
           env, suite, suite_utils, f'acc_r{r}_seed{seed}',
-          True, True, FLAGS.rag_on, True, run_id, store_stage=True,
+          True, True, True, True, run_id, store_stage=True,
           enable_multiagent=FLAGS.multiagent,
       )
 
@@ -475,7 +493,7 @@ def main(argv):
       suite = build_suite(verify_seed, eval_tasks)
       results = _run_phase_and_save(
           env, suite, suite_utils, f'verify_{cfg}_seed{verify_seed}',
-          spec['u1'], spec['u2'], spec['u3'] and FLAGS.rag_on, spec['u4'],
+          spec['u1'], spec['u2'], spec['u3'], spec['u4'],
           run_id, store_stage=False,
           enable_multiagent=FLAGS.multiagent,
       )

@@ -118,6 +118,18 @@ class ProceduralMemoryTest(unittest.TestCase):
     miss = mem.retrieve_hint("Buy groceries", precondition="Home")
     self.assertEqual(miss, "")
 
+  def test_record_outcome_success_increments_score(self):
+    mem = self._make_memory()
+    mem.library.add_skill(Skill(
+        goal_hint="Create a new note",
+        actions=[SkillAction("click", target="Compose")],
+        score=1.0,
+    ))
+    mem.record_outcome("Create a new note", success=True)
+    skill = mem.library.get("Create a new note")
+    self.assertEqual(skill.score, 2.0)
+    self.assertEqual(skill.successes, 1)
+
   def test_record_outcome_updates_and_evicts(self):
     mem = self._make_memory()
     mem.library.add_skill(Skill(

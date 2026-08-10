@@ -643,12 +643,13 @@ scripts/ablation_hierarchical.py  # --multiagent flag 透传
 
 | Hook | 多智能体行为 |
 | --- | --- |
-| `_build_action_prompt` | 首步 `_planner_plan` 一次 → 写 U1.pending/current_subgoal → 注入 `## Plan` 块 |
-| `_on_step_complete` | 不调 super()；replay 步跳过；Action Verifier 门控 U3 画边 + U4 学分；Progress Auditor 判定 + 子目标级 Evidence Certifier 定序；U1 账本复刻 |
-| `_on_task_done` | super() (U2 缓冲) + 全局 Evidence Certifier → `_certified` |
+| `_build_action_prompt` | 首步 `_planner_plan` 一次 → 写 U1.pending/current_subgoal → 注入 `## Plan` + 可选 `## Verifier Feedback` |
+| `_accept_task_done` | 刷新后的最终 UI 上跑全局 Evidence Certifier；PASS 才允许 `done=True`；FAIL → 反馈缺口 + `_planner_replan`，episode 继续 |
+| `_on_step_complete` | 不调 super()；replay 步跳过；Action Verifier 门控 U3 画边；非 CORRECT 写入反馈并计入 stall；Progress Auditor + 子目标级 Evidence Certifier 定序；U1 账本复刻 |
+| `_on_task_done` | 仅在 accept 之后：super() (U2 缓冲)；`_certified` 已在 `_accept_task_done` 设定 |
 | `flush_memory` | max_steps 耗尽路径补跑全局认证 |
 | `set_episode_success` | `success = success and self._certified`（内部认证与外部真值并存） |
-| `reset` | 清多智能体状态 |
+| `reset` | 清多智能体状态与 reflector 反馈 |
 
 ## 12.4 三个验证器信号清单
 

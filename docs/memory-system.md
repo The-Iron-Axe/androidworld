@@ -109,23 +109,26 @@ PageEdge:  source --action--> target, task（该动作服务过的任务）, cou
 
 页面按 embedding 余弦相似度合并（≥ merge_threshold 复用节点，否则新建），保证同一物理页面在不同任务下归并为同一节点，跨任务学习成立。
 
-### 4.3 双端存储
+### 4.3 存储（AutoDL only）
 
-| 端                | 角色        | 更新方式                                                                |
-| ---------------- | --------- | ------------------------------------------------------------------- |
-| **AutoDL 云端（主）** | 存储 + 向量检索 | `POST /add_transition` 增量：页面合并 + FAISS `index.add()` 追加 + 落盘，无需重建索引 |
-| **本机（fallback）** | 离线缓存      | 同步镜像同一转换，隧道断时仍可用                                                    |
+| 端 | 角色 | 更新方式 |
+| --- | --- | --- |
+| **AutoDL 云端** | 唯一存储 + 向量检索 | `POST /add_transition` 增量：页面合并 + FAISS 追加 + 落盘 |
 
-**架构**：本机 agent 每步 `record_transition` → 增量推送一条转换到云端 → 云端合并页面、更新 FAISS、持久化。图随执行实时增长，不依赖手动 `build_index.sh`。
+**架构**：本机 agent 在门控通过后调用 `record_transition` → **只**推送到 AutoDL。无本机 page-graph / 本地 embedding 回退；`rag_url` 缺失或远程失败时直接报错。
+
+- 单 agent：步内缓冲，仅 `set_episode_success(True)` 时 flush。
+- multiagent：仅 Action Verifier=`CORRECT` 的步立即写边。
 
 ### 4.4 检索
 
-- `retrieve_hint`：构造当前屏幕摘要（app/page/UI 元素）→ 查本地图 → 追加远程 RAG → 合并去重 → 注入 `## Environment Knowledge (U3)`。
-- summary 为空时跳过远程（首步无屏幕信息），不触发无意义请求。
+- `retrieve_hint`：构造当前屏幕摘要 → **仅**远程 AutoDL RAG → 注入 `## Environment Knowledge (U3)`。
+- summary 为空时跳过远程（首步无屏幕信息）。
+- 远程失败抛错，不回落到本地图。
 
 ### 4.5 消融开关
 
-`--u3` 独立开关；`--rag_on` 控制是否走远程 RAG。
+`--u3` 为唯一开关。启用时必须提供有效 `--rag_url` / `RAG_URL`。消融脚本里 `--norag_on` 为兼容别名，效果等同关闭 U3（不再存在 “local graph only”）。
 
 ---
 
@@ -171,7 +174,7 @@ SkillAction:
 ### 5.4 检索与更新
 
 - **检索**：`goal_hint` + `precondition` 双因子，k=1（ReasoningBank 的 k=1 结论）。
-- **更新**：执行失败 → score 递减，≤0 淘汰（ProcMEM 增益剪枝）。
+- **更新**：执行成功 → `record_outcome(True)` 加分；失败 → score 递减，≤0 淘汰（ProcMEM 增益剪枝）。
 - **数据独立性**：U4 从 agent 自己 history 取数，不依赖 U2 代码——`--u4` 单独开也能跑。
 
 ### 5.5 参考论文
@@ -221,36 +224,36 @@ U1-U4 + PER 跑完产生大量带标注轨迹（哪些记忆检索帮助了成�
 
 ### 7.3 写路径（Verifier 信号 → 记忆）—— 融合枢纽
 
-| Verifier 信号                                     | 喂给哪层        | 具体操作                 |
-| ----------------------------------------------- | ----------- | -------------------- |
-| Action Verifier `CORRECT`                       | U3、U4       | 该转换才画入页面图；技能该步加分     |
-| Action Verifier `MISGROUNDED` / `NO_EFFECT`     | U3、U4       | 不写入图（动作未兑现声明）；技能该步降权 |
-| Progress Auditor `ADVANCING`                    | U1          | 更新任务态：完成子目标          |
-| Progress Auditor `STALLED` / `LOOPING` / `BUSY` | U1、U2、U3、U4 | 触发换层重检索（当前记忆层未奏效）    |
-| Evidence Certifier `PASS`                       | U2、U4       | 轨迹沉淀进 U2、提炼技能进 U4    |
-| Evidence Certifier `FAIL`                       | U4          | 技能 score 递减、失败护栏沉淀   |
+| Verifier 信号                                     | 喂给哪层        | 具体操作 |
+| ----------------------------------------------- | ----------- | ---- |
+| Action Verifier `CORRECT`                       | U3          | multiagent：该 UI 转换才写入 AutoDL 页面图 |
+| Action Verifier `MISGROUNDED` / `NO_EFFECT`     | U3          | 不写入图；反馈 Executor（不单独加 stall） |
+| Progress Auditor `ADVANCING`                    | U1          | 子目标级认证通过后更新台账 / 推进子目标 |
+| Progress Auditor `STALLED` / `LOOPING` / `BUSY` | Planner     | stall 达阈值后 replan（受 `MAX_REPLANS`） |
+| Evidence Certifier `PASS`                       | U2、U4       | 与外部 GT 融合后沉淀轨迹 / 技能 |
+| Evidence Certifier `FAIL`                       | —           | 否决 `status/complete`；max-steps 可重认证 |
+
+单 agent（无 multiagent）：无步级 AV；U3 在 episode GT 成功时整段 flush 到 AutoDL。U4 按 episode 成败 `record_outcome`，**不再**用 AV 做步级学分。
 
 ### 7.4 三合一 Verifier 对记忆的深层价值
 
-1. **记忆只存可信的东西**：只有 Action Verifier 确认"动作兑现了声明"，U3 才画边、U4 才给技能加分。记忆质量从任务级真值升级到步骤级真值。
-2. **U4 从任务级成败升级到步骤级学分**：技能每一步可独立记分（做对/点偏/无效）。
-3. **Progress Auditor 是换层检索触发器**：STALLED 时切换记忆层，单记忆系统做不到。
+1. **记忆只存可信的东西**（multiagent）：只有 Action Verifier 确认 CORRECT 的 UI 转换才写 U3。
+2. **完成门控**：Evidence Certifier 否决过早的 `status/complete`；空 ACCEPTANCE 清单 fail-closed（不造假默认 A1）。
+3. **Progress Auditor 触发 replan**：连续无进展达阈值后刷新子目标（不与 cert veto 共用 `MAX_REPLANS`）。
 
 ### 7.5 与现有代码的衔接
 
-当前 `set_episode_success` 用 AndroidWorld 外部真值喂 U2/U4。融合后，Evidence Certifier 的 PASS/FAIL 替代/补充该信号，Action Verifier 提供新增的步骤级信号喂 U4。
-
-
+`set_episode_success`：外部 AndroidWorld GT 与 multiagent `_certified`（若已设定）AND 后写 U2/U4；单 agent 另将缓冲的 U3 转换 flush 到 AutoDL（失败不阻断 U2/U4）。
 
 ## 8. 当前进度
 
-| 层        | 状态        | 说明                                                     |
-| -------- | --------- | ------------------------------------------------------ |
-| U1 任务状态  | ✅ 完成      | task_state.py，完整                                       |
-| U2 情景轨迹  | ✅ 数据层完成   | episodic.py 包装 DMS；Planner 子计划分解留待多智能体阶段               |
-| U3 环境知识  | ✅ 云端实时图完成 | 本地图 + AutoDL 增量同步，空图启动无 demo 污染                        |
-| U4 程序性技能 | ✅ 数据层完成   | skill.py / skill_mining.py / procedural.py；三个质量 bug 已修 |
-| U5 内部化   | ❌ 未实现     | 离线微调，留作后续工作                                            |
+| 层        | 状态        | 说明 |
+| -------- | --------- | ---- |
+| U1 任务状态  | ✅ 完成      | task_state.py；multiagent 写入子目标 |
+| U2 情景轨迹  | ✅ 数据层完成   | episodic.py 包装 DMS；replay finalize 已接 |
+| U3 环境知识  | ✅ AutoDL-only | 仅远程图；无本机 page-graph 回退；缺 `rag_url` 报错 |
+| U4 程序性技能 | ✅ 数据层完成   | 成功/失败均 `record_outcome`；技能以 prompt hint 注入 |
+| U5 内部化   | ❌ 未实现     | 离线微调，留作后续工作 |
 
 ## 9. 参考论文
 

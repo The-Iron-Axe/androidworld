@@ -414,6 +414,46 @@ class M3A(base_agent.EnvironmentInteractingAgent):
     Subclasses override this to finalize memory entries (U2, etc.).
     """
 
+  def _accept_task_done(self, goal: str, step_data: dict[str, Any]) -> bool:
+    """Whether to honor Executor status/complete and end the episode.
+
+    Default True (baseline / single-agent). Multi-agent overrides to run the
+    Evidence Certifier and may return False to keep executing.
+    """
+    del goal, step_data
+    return True
+
+  def _capture_after_state(self, step_data: dict[str, Any]) -> None:
+    """Refresh env UI + SoM screenshot into step_data after_* fields."""
+    state = self.env.get_state(wait_to_stabilize=False)
+    logical_screen_size = self.env.logical_screen_size
+    orientation = self.env.orientation
+    physical_frame_boundary = self.env.physical_frame_boundary
+    after_ui_elements = state.ui_elements
+    after_ui_elements_list = _generate_ui_elements_description_list(
+        after_ui_elements, logical_screen_size
+    )
+    step_data['after_ui_elements'] = after_ui_elements
+    step_data['after_ui_elements_list'] = after_ui_elements_list
+    after_screenshot = _downscale_screenshot(state.pixels.copy())
+    for index, ui_element in enumerate(after_ui_elements):
+      if m3a_utils.validate_ui_element(ui_element, logical_screen_size):
+        m3a_utils.add_ui_element_mark(
+            after_screenshot,
+            ui_element,
+            index,
+            logical_screen_size,
+            physical_frame_boundary,
+            orientation,
+            mark_scale=1.0 / _SCREENSHOT_SCALE_FACTOR,
+        )
+    if step_data.get('before_screenshot_with_som') is not None:
+      m3a_utils.add_screenshot_label(
+          step_data['before_screenshot_with_som'], 'before'  # pyrefly: ignore[bad-argument-type]
+      )
+      m3a_utils.add_screenshot_label(after_screenshot, 'after')
+    step_data['after_screenshot_with_som'] = after_screenshot.copy()  # pyrefly: ignore[bad-assignment]
+
   def set_task_guidelines(self, task_guidelines: list[str]) -> None:
     self.additional_guidelines = task_guidelines
 
@@ -577,6 +617,31 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
     if converted_action.action_type == 'status':
       if converted_action.goal_status == 'infeasible':
         logging.info('Agent stopped since it thinks mission impossible.')
+        # infeasible ends the episode without Evidence Certifier (task is
+        # abandoned, not "completed successfully").
+        try:
+          self._capture_after_state(step_data)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          logging.info('Failed to capture after-state on infeasible: %s', e)
+        step_data['summary'] = 'Agent thinks the request is infeasible.'  # pyrefly: ignore[bad-assignment]
+        self.history.append(step_data)
+        self._on_task_done(goal, step_data)
+        return base_agent.AgentInteractionResult(True, step_data)
+
+      # Capture the final screen before Evidence Certifier / done decision.
+      try:
+        self._capture_after_state(step_data)
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.info('Failed to capture after-state on status: %s', e)
+      if not self._accept_task_done(goal, step_data):
+        step_data['summary'] = (
+            'Agent proposed completion but Evidence Certifier rejected; '
+            'continuing.'
+        )
+        self.history.append(step_data)
+        # Do NOT run _on_step_complete: rejected status must not draw U3
+        # edges or advance Progress Auditor / subgoals.
+        return base_agent.AgentInteractionResult(False, step_data)
       step_data['summary'] = 'Agent thinks the request has been completed.'  # pyrefly: ignore[bad-assignment]
       self.history.append(step_data)
       self._on_task_done(goal, step_data)
@@ -606,34 +671,9 @@ Action: {{"action_type": "status", "goal_status": "infeasible"}}"""
 
     time.sleep(self.wait_after_action_seconds)
 
-    state = self.env.get_state(wait_to_stabilize=False)
-    logical_screen_size = self.env.logical_screen_size
-    orientation = self.env.orientation
-    physical_frame_boundary = self.env.physical_frame_boundary
-    after_ui_elements = state.ui_elements
-    after_ui_elements_list = _generate_ui_elements_description_list(
-        after_ui_elements, logical_screen_size
-    )
-    step_data['after_ui_elements'] = after_ui_elements
-    step_data['after_ui_elements_list'] = after_ui_elements_list
-    after_screenshot = _downscale_screenshot(state.pixels.copy())
-    for index, ui_element in enumerate(after_ui_elements):
-      if m3a_utils.validate_ui_element(ui_element, logical_screen_size):
-        m3a_utils.add_ui_element_mark(
-            after_screenshot,
-            ui_element,
-            index,
-            logical_screen_size,
-            physical_frame_boundary,
-            orientation,
-            mark_scale=1.0 / _SCREENSHOT_SCALE_FACTOR,
-        )
-
-    m3a_utils.add_screenshot_label(
-        step_data['before_screenshot_with_som'], 'before'  # pyrefly: ignore[bad-argument-type]
-    )
-    m3a_utils.add_screenshot_label(after_screenshot, 'after')
-    step_data['after_screenshot_with_som'] = after_screenshot.copy()  # pyrefly: ignore[bad-assignment]
+    self._capture_after_state(step_data)
+    after_ui_elements_list = step_data.get('after_ui_elements_list', '')
+    after_screenshot = step_data['after_screenshot_with_som']
 
     summary_prompt = _summarize_prompt(
         action,

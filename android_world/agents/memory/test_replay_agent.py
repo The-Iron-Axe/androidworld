@@ -1,5 +1,6 @@
 """Offline tests for MemoryAugmentedAgent deterministic replay (U2)."""
 
+import types
 import unittest
 
 from android_world.agents import memory_agent
@@ -72,7 +73,13 @@ def _stub_hit(agent, traj, memory_id="stub"):
 
   class _StubEntry:
     memory_id = _mid
+    meta = types.SimpleNamespace(
+        reuse_count=0, success_count=0, failure_count=0
+    )
+
   agent.u2._active_entry = _StubEntry()
+  # Decoupled storage: bank load of stub id returns [] → replay uses traj list.
+  agent.u2.bank._load_trajectory = lambda entry: []
 
 
 def _traj_open_click():
@@ -222,15 +229,30 @@ class TestReplay(unittest.TestCase):
 
   def test_u1_u2_u3_all_enabled_constructs(self):
     env = _FakeEnv()
-    agent = memory_agent.MemoryAugmentedAgent(
-        env, _FakeLLM(), enable_u1=True, enable_u2=True, enable_u3=True,
-        rag_url=None,
-    )
+    from unittest import mock
+    with mock.patch(
+        "android_world.agents.memory_agent.EnvKnowledge"
+    ) as mock_ek:
+      mock_ek.return_value = mock.Mock()
+      agent = memory_agent.MemoryAugmentedAgent(
+          env, _FakeLLM(), enable_u1=True, enable_u2=True, enable_u3=True,
+          rag_url="http://127.0.0.1:18180",
+      )
     self.assertTrue(agent.enable_u1)
     self.assertTrue(agent.enable_u2)
     self.assertTrue(agent.enable_u3)
     self.assertIsNotNone(agent.u2)
     self.assertIsNotNone(agent.u3)
+    mock_ek.assert_called_once()
+    _, kwargs = mock_ek.call_args
+    self.assertEqual(kwargs.get("rag_url"), "http://127.0.0.1:18180")
+
+  def test_u3_requires_rag_url(self):
+    env = _FakeEnv()
+    with self.assertRaises(ValueError):
+      memory_agent.MemoryAugmentedAgent(
+          env, _FakeLLM(), enable_u3=True, rag_url=""
+      )
 
   def test_no_replay_state_without_u2(self):
     env = _FakeEnv()

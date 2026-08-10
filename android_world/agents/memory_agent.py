@@ -154,6 +154,10 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       self.u4 = ProceduralMemory(persistence_dir=u4_persistence_dir)
     # Goal buffered by _on_task_done/flush_memory; written by set_episode_success
     self._pending_trajectory_goal: str | None = None
+    # Single-agent U3: buffer transitions until episode GT success (no AV).
+    self._pending_u3_transitions: list[dict[str, Any]] = []
+    # U4 episode credit weight in [0,1]; multi-agent overrides via AV pass rate.
+    self._u4_strength: float = 1.0
 
     # ── U2 deterministic replay state (§3.2.2) ──
     self._replay_active = False
@@ -167,10 +171,17 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     super().reset(go_home_on_reset)
     self.u1 = None
     self._pending_trajectory_goal = None
+    self._pending_u3_transitions = []
+    self._u4_strength = 1.0
     self._replay_active = False
     self._replay_entry = None
     self._replay_index = 0
     self._replay_trajectory = []
+    # Drop retrieval credit across episodes so a later task cannot finalize
+    # a stale hit from a prior replay that never flushed.
+    if self.u2 is not None:
+      self.u2._active_entry = None
+      self.u2._last_added_entry = None
 
   # ── Hook: inject memory context into the action prompt ───────────────
 
@@ -269,14 +280,16 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
           before_list, current_app=before_app or "", current_page=before_page or "")
       after_summary = build_screen_summary(
           after_list, current_app=after_app or "", current_page=after_page or "")
-      self.u3.record_transition(
-          before_summary=before_summary,
-          action_summary=_action_effect_str(action, before_elements),
-          task=goal,
-          after_summary=after_summary,
-          before_app=before_app,
-          after_app=after_app,
-      )
+      # Buffer only — flush on set_episode_success(True). Multi-agent draws
+      # edges immediately via AV=CORRECT and does not call this path.
+      self._pending_u3_transitions.append({
+          "before_summary": before_summary,
+          "action_summary": _action_effect_str(action, before_elements),
+          "task": goal,
+          "after_summary": after_summary,
+          "before_app": before_app,
+          "after_app": after_app,
+      })
 
   # ── Hook: count failed steps in U1 ───────────────────────────────────
 
@@ -311,9 +324,20 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     the agent's own completion claim (which can be wrong) with ground truth.
 
     U2: feeds the global failure rate and flushes the trajectory.
+    U3: on success, flushes buffered page transitions to AutoDL (single-agent).
     U4: successful episodes buffer their trajectory for skill mining; failed
         episodes drive score eviction.
     """
+    if self.enable_u3 and self.u3 is not None:
+      if success:
+        try:
+          for tr in self._pending_u3_transitions:
+            self.u3.record_transition(**tr)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          # AutoDL-only U3 must not abort U2/U4 finalization.
+          logging.exception("U3 flush failed; continuing U2/U4 finalize: %s", e)
+      self._pending_u3_transitions = []
+
     if self.enable_u2 and self.u2 is not None:
       # Feed the global failure rate before flushing the trajectory.
       self.u2.record_episode_outcome(success)
@@ -372,9 +396,13 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return
 
     # Replayed trajectories are re-consumed memories, not new experiences;
-    # do not re-store them (§3.2.2).  Replayed history entries carry
-    # u2_replayed=True, and _end_replay() clears the buffered goal.
-    if goal is None or any(h.get("u2_replayed") for h in self.history):
+    # do not re-store them (§3.2.2).  Still finalize so reuse/K-verify credit
+    # updates.  _end_replay() may have cleared the buffered goal already.
+    replayed = any(h.get("u2_replayed") for h in self.history)
+    if goal is None or replayed:
+      finalize_goal = goal or getattr(self, "_current_goal", "") or ""
+      if self.u2._active_entry is not None or self.u2._last_added_entry is not None:
+        self.u2.finalize_task(finalize_goal, success=success)
       return
 
     trajectory: list[ObsAct] = []
@@ -430,6 +458,10 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return
 
     if success:
+      # Reward any skill that matched this episode, then buffer + mine.
+      self.u4.record_outcome(
+          goal, success=True, strength=getattr(self, "_u4_strength", 1.0)
+      )
       # Precondition = the screen where the skill starts (first step's page).
       first_elements = self.history[0].get("before_ui_elements", []) if self.history else []
       first_app, first_page = extract_app_from_elements(first_elements)
@@ -445,7 +477,9 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       # not run before record_outcome, or a freshly mined negative skill
       # (score=1.0) would be immediately penalized down to 0 and evicted,
       # never surviving long enough to be retrieved.
-      self.u4.record_outcome(goal, success=False)
+      self.u4.record_outcome(
+          goal, success=False, strength=getattr(self, "_u4_strength", 1.0)
+      )
       first_elements = self.history[0].get("before_ui_elements", []) if self.history else []
       first_app, first_page = extract_app_from_elements(first_elements)
       precondition = first_page or first_app
