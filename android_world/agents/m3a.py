@@ -462,6 +462,9 @@ class M3A(base_agent.EnvironmentInteractingAgent):
     # Hide the coordinates on screen which might affect the vision model.
     self.env.hide_automation_ui()
     self.history = []
+    # Per-episode LLM token counter (read by suite_utils at task end).
+    if getattr(self, 'llm', None) is not None:
+      self.llm.reset_token_usage()
 
   def step(self, goal: str) -> base_agent.AgentInteractionResult:
     step_data = {

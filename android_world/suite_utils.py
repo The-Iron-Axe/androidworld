@@ -242,6 +242,37 @@ def _filter_tasks(
   return subset
 
 
+def _collect_token_usage(
+    agent: base_agent.EnvironmentInteractingAgent,
+) -> dict[str, int] | None:
+  """Pull the episode's LLM token counter off the agent's wrapper, if any."""
+  llm = getattr(agent, 'llm', None)
+  if llm is None:
+    return None
+  try:
+    return llm.token_usage
+  except Exception:  # pylint: disable=broad-exception-caught
+    return None
+
+
+def _collect_memory_stats(
+    agent: base_agent.EnvironmentInteractingAgent,
+) -> dict[str, Any] | None:
+  """Pull per-episode memory usage stats off the agent, if any.
+
+  Memory modules (U2/U3/U4) expose `stats()`; the agent forwards a
+  consolidated per-episode dict via `episode_memory_stats()`.  Falls back to
+  None for agents without memory so the field is simply absent.
+  """
+  getter = getattr(agent, 'episode_memory_stats', None)
+  if getter is None:
+    return None
+  try:
+    return getter()
+  except Exception:  # pylint: disable=broad-exception-caught
+    return None
+
+
 def _run_task(
     task: TaskEvalType,
     run_episode: Callable[[TaskEvalType], episode_runner.EpisodeResult],
@@ -309,6 +340,8 @@ def _run_task(
         constants.EpisodeConstants.EPISODE_LENGTH: len(
             interaction_results.step_data[constants.STEP_NUMBER]
         ),
+        constants.EpisodeConstants.TOKEN_USAGE: _collect_token_usage(agent),
+        constants.EpisodeConstants.MEMORY_STATS: _collect_memory_stats(agent),
         constants.EpisodeConstants.AUX_DATA: interaction_results.aux_data,
         constants.EpisodeConstants.SCREEN_CONFIG: _get_screen_config(task),
         constants.EpisodeConstants.EXCEPTION_INFO: None,

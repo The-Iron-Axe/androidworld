@@ -221,6 +221,44 @@ _MINIWOB_ADDITIONAL_GUIDELINES = [
 ]
 
 
+def _install_run_logger(checkpoint_dir: str) -> None:
+  """Tee stdout/stderr into a per-run log file inside checkpoint_dir.
+
+  Wraps sys.stdout/stderr with a Tee that writes every line both to the
+  terminal and to `run.log`, so full runtime output (LLM calls, memory
+  traces, token lines) is persisted even if the terminal scrollback is lost.
+  Replacing the streams is undone on process exit automatically.
+  """
+  os.makedirs(checkpoint_dir, exist_ok=True)
+  log_path = os.path.join(checkpoint_dir, 'run.log')
+
+  class _Tee:
+    def __init__(self, *streams):
+      self.streams = streams
+
+    def write(self, data):
+      for s in self.streams:
+        try:
+          s.write(data)
+        except ValueError:
+          pass
+      return len(data)
+
+    def flush(self):
+      for s in self.streams:
+        try:
+          s.flush()
+        except ValueError:
+          pass
+
+  try:
+    log_file = open(log_path, 'a', encoding='utf-8')
+  except OSError:
+    return
+  sys.stdout = _Tee(sys.__stdout__, log_file)
+  sys.stderr = _Tee(sys.__stderr__, log_file)
+
+
 def _get_agent(
     env: interface.AsyncEnv,
     family: str | None = None,
@@ -372,6 +410,10 @@ def _main() -> None:
     checkpoint_dir = _CHECKPOINT_DIR.value
   else:
     checkpoint_dir = checkpointer_lib.create_run_directory(_OUTPUT_PATH.value)
+
+  # Tee all runtime output (prints, LLM token lines, memory traces) into a
+  # per-run log file so nothing is lost to the terminal scrollback.
+  _install_run_logger(checkpoint_dir)
 
   print(
       f'Starting eval with agent {_AGENT_NAME.value} and writing to'

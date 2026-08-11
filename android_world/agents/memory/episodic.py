@@ -109,6 +109,11 @@ class EpisodicMemory:
     self._episode_successes: int = 0
     self._episode_failures: int = 0
 
+    # Per-episode retrieval counters (read by suite_utils at task end).
+    self._episode_stats = {
+        'hits': 0, 'misses': 0, 'risk_blocked': 0, 'mutated': 0, 'replays': 0,
+    }
+
     # K-Verification (Appendix D): K=3 strikes → prune.
     self._kverifier = KVerifier(self.config)
 
@@ -167,9 +172,11 @@ class EpisodicMemory:
     # the terminal: record/verify rounds should show hits appearing in the
     # verify round only.
     if not result.hit:
+      self._episode_stats['misses'] += 1
       print(f"[U2] retrieve goal={goal[:50]!r} -> miss (no entry above threshold)")
       return None
     if result.risk_blocked:
+      self._episode_stats['risk_blocked'] += 1
       print(f"[U2] retrieve goal={goal[:50]!r} -> hit score={result.score:.3f} but RISK-BLOCKED")
       return None
     if result.entry is None:
@@ -177,11 +184,13 @@ class EpisodicMemory:
       return None
     if result.should_mutate:
       # eps-MUTATION triggered — force re-exploration, but still hint
+      self._episode_stats['mutated'] += 1
       print(f"[U2] retrieve goal={goal[:50]!r} -> hit score={result.score:.3f} but eps-MUTATION (re-explore)")
       self._active_entry = result.entry
       return None
 
     entry = result.entry
+    self._episode_stats['hits'] += 1
     # The DMS retrieve() already loaded the trajectory from disk on a
     # definitive hit, so entry.trajectory is guaranteed non-empty here
     # (miss / risk-block / mutation / None-entry all returned above).
@@ -486,6 +495,17 @@ class EpisodicMemory:
     return self.bank.stats()
 
   # ── Global failure rate T_global (§3.2.4) ──────────────────────────
+
+  # ── Per-episode retrieval stats ─────────────────────────────────────
+
+  def episode_stats(self) -> dict[str, int]:
+    """Per-episode U2 retrieval counters (read by suite_utils at task end)."""
+    return dict(self._episode_stats)
+
+  def reset_episode_stats(self) -> None:
+    self._episode_stats = {
+        'hits': 0, 'misses': 0, 'risk_blocked': 0, 'mutated': 0, 'replays': 0,
+    }
 
   def record_episode_outcome(self, success: bool) -> None:
     """Track episode-level success/failure for the global failure rate.

@@ -46,6 +46,8 @@ class EpisodeConstants:
   RUN_TIME = 'run_time'
   AGENT_NAME = 'agent_name'
   EPISODE_LENGTH = 'episode_length'
+  TOKEN_USAGE = 'token_usage'
+  MEMORY_STATS = 'memory_stats'
   SCREEN_CONFIG = 'screen_config'
   EXCEPTION_INFO = 'exception_info'
   FINISH_DTIME = 'finish_dtime'

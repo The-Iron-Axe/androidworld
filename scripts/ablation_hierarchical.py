@@ -120,6 +120,12 @@ flags.DEFINE_string(
     'run_id', '',
     'Reuse an existing run_id to resume from IncrementalCheckpointer.',
 )
+flags.DEFINE_string(
+    'results_dir', '',
+    'Directory for per-phase result JSON + run.log. Empty = '
+    '<repo_root>/scripts/results (back-compat default). Pass e.g. '
+    'runs/u123 to store results under a config-named runs/ folder.',
+)
 flags.DEFINE_bool(
     'multiagent',
     False,
@@ -183,8 +189,15 @@ def _run_phase(
     run_id: str,
     store_stage: bool,
     enable_multiagent: bool = False,
+    results_dir: str = '',
 ) -> list[dict]:
-  """Run one phase.  Returns episode metadata."""
+  """Run one phase.  Returns episode metadata.
+
+  Checkpoints (episode pkl.gz) go under `results_dir/<phase>/` when
+  --results_dir is set, so a single run folder holds checkpoints + result
+  JSON + run.log together.  Without it, checkpoints go to the legacy
+  runs/run_<run_id>_<phase> location.
+  """
   from android_world import checkpointer as checkpointer_lib
   from android_world.agents import infer
   from android_world.agents import memory_agent
@@ -224,9 +237,12 @@ def _run_phase(
   agent = agent_cls(**agent_kwargs)
   agent.name = agent_name
 
-  ckpt_root = os.path.join(_REPO_ROOT, 'runs')
-  ckpt_name = f'run_{run_id}_{agent_name}' if run_id else f'run_{agent_name}'
-  checkpoint_dir = os.path.join(ckpt_root, ckpt_name)
+  if results_dir:
+    checkpoint_dir = os.path.join(results_dir, agent_name)
+  else:
+    ckpt_root = os.path.join(_REPO_ROOT, 'runs')
+    ckpt_name = f'run_{run_id}_{agent_name}' if run_id else f'run_{agent_name}'
+    checkpoint_dir = os.path.join(ckpt_root, ckpt_name)
   os.makedirs(checkpoint_dir, exist_ok=True)
   checkpointer = checkpointer_lib.IncrementalCheckpointer(checkpoint_dir)
   print(f'Episode checkpoints -> {checkpoint_dir}')
@@ -370,8 +386,9 @@ def _count_success(results) -> int:
   return sum(1 for e in results if _is_ok(e.get('is_successful')))
 
 
-def _save_results(results, phase, run_id) -> str:
-  out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
+def _save_results(results, phase, run_id, results_dir='') -> str:
+  out_dir = results_dir or os.path.join(
+      os.path.dirname(os.path.abspath(__file__)), 'results')
   os.makedirs(out_dir, exist_ok=True)
   path = os.path.join(out_dir, f'{run_id}_{phase}.json')
   data = {
@@ -382,7 +399,9 @@ def _save_results(results, phase, run_id) -> str:
           {'task_template': e.get('task_template', ''), 'goal': e.get('goal', ''),
            'is_successful': e.get('is_successful'),
            'episode_length': e.get('episode_length'),
-           'run_time': e.get('run_time')}
+           'run_time': e.get('run_time'),
+           'token_usage': e.get('token_usage'),
+           'memory_stats': e.get('memory_stats')}
           for e in results
       ],
   }
@@ -392,12 +411,13 @@ def _save_results(results, phase, run_id) -> str:
   return path
 
 
-def _run_phase_and_save(env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage, enable_multiagent=False):
+def _run_phase_and_save(env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage, enable_multiagent=False, results_dir=''):
   results = _run_phase(
       env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage,
       enable_multiagent=enable_multiagent,
+      results_dir=results_dir,
   )
-  _save_results(results, phase, run_id)
+  _save_results(results, phase, run_id, results_dir)
   print(f'{phase}: {_count_success(results)}/{len(results)} ok')
   return results
 
@@ -411,12 +431,63 @@ CONFIGS = {
 }
 
 
+def _install_run_logger(log_dir: str) -> None:
+  """Tee stdout/stderr into <log_dir>/run.log (same helper as run.py).
+
+  Wraps sys.stdout/stderr with a Tee that writes every line both to the
+  terminal and to run.log, so full runtime output is persisted even if the
+  terminal scrollback is lost.
+  """
+  os.makedirs(log_dir, exist_ok=True)
+  log_path = os.path.join(log_dir, 'run.log')
+
+  class _Tee:
+    def __init__(self, *streams):
+      self.streams = streams
+
+    def write(self, data):
+      for s in self.streams:
+        try:
+          s.write(data)
+        except ValueError:
+          pass
+      return len(data)
+
+    def flush(self):
+      for s in self.streams:
+        try:
+          s.flush()
+        except ValueError:
+          pass
+
+  try:
+    log_file = open(log_path, 'a', encoding='utf-8')
+  except OSError:
+    return
+  sys.stdout = _Tee(sys.__stdout__, log_file)
+  sys.stderr = _Tee(sys.__stderr__, log_file)
+
+
 def main(argv):
   del argv
   FLAGS(sys.argv)
   run_id = FLAGS.run_id.strip() or time.strftime('%Y%m%d_%H%M%S')
   _PROGRESS_DATA['run_id'] = run_id
+  results_dir = FLAGS.results_dir.strip() or ''
+  if results_dir:
+    # A config-named results dir (e.g. runs/u123) gets a per-run timestamp
+    # subfolder so multiple ablation runs of the same config never collide.
+    # Format matches checkpointer.create_run_directory so the folder looks
+    # like run_20260731T135847788342.
+    import datetime
+    ts = datetime.datetime.now().strftime('%Y%m%dT%H%M%S%f')
+    results_dir = os.path.join(_REPO_ROOT, results_dir, f'run_{ts}')
+  _install_run_logger(results_dir or _REPO_ROOT)
   print(f'Run ID: {run_id}')
+  if results_dir:
+    print(f'Results + run.log -> {results_dir}')
+  else:
+    print('Results -> scripts/results/  (default; set --results_dir to override)')
   print(f'U3 RAG: {"on" if FLAGS.rag_on else "off (--norag_on ≡ disable U3)"}')
 
   # By design the accumulation and verification task sets are the same by
@@ -478,6 +549,7 @@ def main(argv):
           env, suite, suite_utils, f'acc_r{r}_seed{seed}',
           True, True, True, True, run_id, store_stage=True,
           enable_multiagent=FLAGS.multiagent,
+          results_dir=results_dir,
       )
 
     # ── 验证轮: hierarchical ablation (this seed's matured stores) ───
@@ -496,6 +568,7 @@ def main(argv):
           spec['u1'], spec['u2'], spec['u3'], spec['u4'],
           run_id, store_stage=False,
           enable_multiagent=FLAGS.multiagent,
+          results_dir=results_dir,
       )
       across_seeds.setdefault(cfg, []).append(
           (_count_success(results), len(results))

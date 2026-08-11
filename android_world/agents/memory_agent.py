@@ -165,6 +165,30 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self._replay_index = 0
     self._replay_trajectory: list[ObsAct] = []
 
+  # ── Per-episode memory stats (consumed by suite_utils for result files) ─
+
+  def episode_memory_stats(self) -> dict[str, Any]:
+    """Consolidated per-episode memory usage, read at task end.
+
+    Each enabled memory module tracks its own episode counters internally and
+    exposes them; this forwarder aggregates what's available.  Absent modules
+    are simply omitted so the result JSON only carries what was enabled.
+    """
+    stats: dict[str, Any] = {}
+    for key, mem in (('u2', self.u2), ('u3', self.u3), ('u4', self.u4)):
+      if mem is None:
+        continue
+      getter = getattr(mem, 'episode_stats', None)
+      if getter is None:
+        continue
+      try:
+        ep = getter()
+        if ep:
+          stats[key] = ep
+      except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return stats
+
   # ── Lifecycle ───────────────────────────────────────────────────────
 
   def reset(self, go_home_on_reset: bool = False) -> None:
@@ -177,6 +201,15 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self._replay_entry = None
     self._replay_index = 0
     self._replay_trajectory = []
+    for mem in (self.u2, self.u3, self.u4):
+      if mem is None:
+        continue
+      reset = getattr(mem, 'reset_episode_stats', None)
+      if reset is not None:
+        try:
+          reset()
+        except Exception:  # pylint: disable=broad-exception-caught
+          pass
     # Drop retrieval credit across episodes so a later task cannot finalize
     # a stale hit from a prior replay that never flushed.
     if self.u2 is not None:

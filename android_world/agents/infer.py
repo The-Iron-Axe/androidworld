@@ -62,6 +62,25 @@ def image_to_jpeg_bytes(image: Image.Image) -> bytes:
 class LlmWrapper(abc.ABC):
   """Abstract interface for (text only) LLM."""
 
+  def __init__(self):
+    self._token_usage = {'prompt': 0, 'completion': 0, 'cache_hit': 0}
+
+  def reset_token_usage(self) -> None:
+    self._token_usage = {'prompt': 0, 'completion': 0, 'cache_hit': 0}
+
+  @property
+  def token_usage(self) -> dict[str, int]:
+    return dict(self._token_usage)
+
+  def _record_usage(self, usage: dict | None) -> None:
+    if not usage:
+      return
+    cached = usage.get('prompt_cache_hit_tokens') or 0
+    cached_td = (usage.get('prompt_tokens_details') or {}).get('cached_tokens') or 0
+    self._token_usage['prompt'] += usage.get('prompt_tokens') or 0
+    self._token_usage['completion'] += usage.get('completion_tokens') or 0
+    self._token_usage['cache_hit'] += cached or cached_td
+
   @abc.abstractmethod
   def predict(
       self,
@@ -344,7 +363,9 @@ class Gpt4Wrapper(LlmWrapper, MultimodalLlmWrapper):
             timeout=self.REQUEST_TIMEOUT_SECONDS,
         )
         if response.ok and 'choices' in response.json():
-          # Log token usage (OpenAI-compatible APIs return it in the body).
+          # Log AND accumulate token usage (OpenAI-compatible APIs return it in
+          # the body).  `_token_usage` is the episode-level counter read by
+          # suite_utils at task end; the print keeps a live per-call trace.
           usage = response.json().get('usage')
           if usage:
             cached = usage.get('prompt_cache_hit_tokens')
@@ -355,6 +376,7 @@ class Gpt4Wrapper(LlmWrapper, MultimodalLlmWrapper):
                 f"total={usage.get('total_tokens')} "
                 f"cache_hit={cached} cache_td={cached_td}"
             )
+            self._record_usage(usage)
           return (
               response.json()['choices'][0]['message']['content'],
               None,

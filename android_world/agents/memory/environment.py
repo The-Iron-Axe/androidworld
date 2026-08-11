@@ -84,6 +84,8 @@ class EnvKnowledge:
         base_url=self.rag_url, timeout=timeout
     )
     self._last_raw: dict[str, Any] | None = None
+    # Per-episode retrieval counters (read by suite_utils at task end).
+    self._episode_stats = {'retrieve_calls': 0, 'retrieve_hits': 0}
     # Embedder kept for API compatibility / tests; production retrieve uses AutoDL /retrieve.
     if embedder is None:
       embedder = AutoDLEmbeddingBackend(rag_url=self.rag_url)
@@ -126,6 +128,7 @@ class EnvKnowledge:
     )
     if not summary.strip():
       return ""
+    self._episode_stats['retrieve_calls'] += 1
     raw = self._client.retrieve(
         summary,
         top_k=self.top_k,
@@ -136,4 +139,14 @@ class EnvKnowledge:
     remote = list(raw.get("guidelines") or [])
     if not remote:
       return ""
+    self._episode_stats['retrieve_hits'] += 1
     return self._client.format_guidelines_for_prompt(remote)
+
+  # ── Per-episode retrieval stats ─────────────────────────────────────
+
+  def episode_stats(self) -> dict[str, int]:
+    """Per-episode U3 retrieval counters (read by suite_utils at task end)."""
+    return dict(self._episode_stats)
+
+  def reset_episode_stats(self) -> None:
+    self._episode_stats = {'retrieve_calls': 0, 'retrieve_hits': 0}

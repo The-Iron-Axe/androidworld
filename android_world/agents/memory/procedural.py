@@ -46,6 +46,8 @@ class ProceduralMemory:
     # Buffered FAILED trajectories — mined into negative "avoid" skills.
     self._failed_buffer: list[tuple[str, list, str]] = []
     self._last_mined: int = 0
+    # Per-episode skill retrieval counters (read by suite_utils at task end).
+    self._episode_stats = {'positive_hits': 0, 'negative_hits': 0}
 
   # ── Writing: buffer + mine ─────────────────────────────────────────
 
@@ -195,6 +197,10 @@ class ProceduralMemory:
     """
     positive = self._top_skills(goal, precondition, "positive")
     negative = self._top_skills(goal, precondition, "negative")
+    if positive:
+      self._episode_stats['positive_hits'] += 1
+    if negative:
+      self._episode_stats['negative_hits'] += 1
     return {
         "positive": (
             self._format_skills(positive[:k], negative=False) if positive else ""
@@ -203,6 +209,15 @@ class ProceduralMemory:
             self._format_skills(negative[:k], negative=True) if negative else ""
         ),
     }
+
+  # ── Per-episode retrieval stats ─────────────────────────────────────
+
+  def episode_stats(self) -> dict[str, int]:
+    """Per-episode U4 skill-retrieval counters (read by suite_utils)."""
+    return dict(self._episode_stats)
+
+  def reset_episode_stats(self) -> None:
+    self._episode_stats = {'positive_hits': 0, 'negative_hits': 0}
 
   @staticmethod
   def _format_skills(skills: list[Skill], negative: bool) -> str:
