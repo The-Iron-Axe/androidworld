@@ -101,10 +101,12 @@ flags.DEFINE_string(
 )
 flags.DEFINE_bool(
     'rag_on',
-    True,
-    'Deprecated alias for enabling U3 remote RAG. U3 is AutoDL-only: '
-    '--norag_on disables U3 entirely (same as u3=False in configs). '
-    'Do not use for "local graph only".',
+    False,
+    'Enable U3 remote RAG (AutoDL page-graph). Default OFF: without this flag '
+    'U3 is disabled everywhere (accumulate + verify), so the run needs no '
+    'AutoDL tunnel. Pass --rag_on (+ valid --rag_url / RAG_URL) to turn U3 '
+    'on; configs that request U3 (u123, u1234) then draw real page-graph '
+    'guidelines. --norag_on is the default no-op alias.',
 )
 flags.DEFINE_list(
     'configs',
@@ -205,10 +207,11 @@ def _run_phase(
 
   agent_cls = (multi_agent.MultiAgentReflectorAgent if enable_multiagent
                else memory_agent.MemoryAugmentedAgent)
-  # --norag_on ≡ disable U3 (AutoDL-only; no local graph mode).
+  # U3 is opt-in: without --rag_on it stays off everywhere (accumulate +
+  # verify), so a default run needs no AutoDL tunnel.
   if not FLAGS.rag_on and enable_u3:
-    print('WARNING: --norag_on with U3 requested — disabling U3 '
-          '(equivalent to closing U3; AutoDL is required when U3 is on).')
+    print('U3 disabled (no --rag_on). Config requesting U3 runs without it; '
+          'pass --rag_on + --rag_url/RAG_URL to enable AutoDL page-graph.')
     enable_u3 = False
   rag_url = ''
   if enable_u3:
@@ -488,7 +491,7 @@ def main(argv):
     print(f'Results + run.log -> {results_dir}')
   else:
     print('Results -> scripts/results/  (default; set --results_dir to override)')
-  print(f'U3 RAG: {"on" if FLAGS.rag_on else "off (--norag_on ≡ disable U3)"}')
+  print(f'U3 RAG: {"on (--rag_on)" if FLAGS.rag_on else "off (default; pass --rag_on to enable)"}')
 
   # By design the accumulation and verification task sets are the same by
   # default (eval tasks need prior experience in the store).  Warn only if a

@@ -454,11 +454,14 @@ class EpisodicMemory:
           f"fails={self._active_entry.meta.failure_count}"
       )
     elif self._last_added_entry is not None:
-      # Newly stored trajectory — record its initial success/failure outcome.
+      # 新创建的轨迹:对齐论文 Algorithm 1 第 20 行 —— 新记忆创建时
+      # S←1, F←0, K←0(冷启动保护 §3.2.4)。因此失败任务留下的新轨迹
+      # 不累计 failure_count:否则新条目第一次检索就被贝叶斯风险门控挡下,
+      # 记忆永远无法被回放试用。之后若该条目被复用且仍失败,会走上面
+      # _active_entry 分支累计 failure_count 与 verification_failures(K),
+      # 逐步累积风险直至 K-Verification 淘汰。
       if success:
         self._last_added_entry.meta.success_count += 1
-      else:
-        self._last_added_entry.meta.failure_count += 1
       print(
           f"[U2] finalize goal={goal[:50]!r} success={success} -> "
           f"new-entry: success={self._last_added_entry.meta.success_count} "

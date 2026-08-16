@@ -274,5 +274,72 @@ class EpisodicMemoryReplayTest(unittest.TestCase):
             self.assertIsNone(u2.retrieve_replay("A goal never stored before"))
 
 
+class ColdStartProtectionTest(unittest.TestCase):
+    """失败任务创建的新条目必须保持 F=0,冷启动保护才生效(对齐论文
+    Algorithm 1 第 20 行 S←1, F←0, K←0)。否则新条目第一次检索就被
+    贝叶斯风险门控挡下,记忆永远无法被回放试用。"""
+
+    def _make_memory(self, persistence_dir: str):
+        config = DMSConfig()
+        config.disk_storage_dir = persistence_dir
+        config.epsilon = 0.0
+        return EpisodicMemory(config=config, persistence_dir=persistence_dir)
+
+    def _traj(self):
+        return [
+            ObsAct(observation="s0",
+                   action=json_action.JSONAction(action_type="open_app", app_name="Markor"),
+                   step_index=0),
+            ObsAct(observation="s1",
+                   action=json_action.JSONAction(action_type="click", index=2),
+                   step_index=1),
+            ObsAct(observation="s2",
+                   action=json_action.JSONAction(action_type="input_text", text="hi", index=5),
+                   step_index=2),
+        ]
+
+    def test_failed_task_new_entry_keeps_failure_count_zero(self):
+        """失败任务留下的新轨迹 failure_count 必须为 0(冷启动豁免)。"""
+        with tempfile.TemporaryDirectory() as d:
+            u2 = self._make_memory(d)
+            entry = u2.add_trajectory("Create a note", self._traj())
+            u2.finalize_task("Create a note", success=False)
+            self.assertEqual(entry.meta.failure_count, 0)
+            self.assertEqual(entry.meta.success_count, 0)
+
+    def test_cold_start_entry_not_risk_blocked(self):
+        """F=0,S=0 的新条目检索时不应被风险门控挡掉。"""
+        from others.darwinian_memory.risk import (
+            compute_dynamic_threshold, compute_memory_risk_score,
+        )
+        with tempfile.TemporaryDirectory() as d:
+            u2 = self._make_memory(d)
+            entry = u2.add_trajectory("Create a note", self._traj())
+            u2.finalize_task("Create a note", success=False)
+            self.assertEqual(entry.meta.failure_count, 0)
+            T_i, _, _ = compute_memory_risk_score(entry)
+            tau = compute_dynamic_threshold(u2.global_failure_rate)
+            self.assertLess(T_i, tau)
+
+    def test_reused_entry_failure_accumulates_risk(self):
+        """被复用后仍失败:failure_count 必须累积,风险分升高到会被挡。"""
+        from others.darwinian_memory.risk import (
+            compute_dynamic_threshold, compute_memory_risk_score,
+        )
+        with tempfile.TemporaryDirectory() as d:
+            u2 = self._make_memory(d)
+            entry = u2.add_trajectory("Create a note", self._traj())
+            # 第一次:新条目创建(F=0,不挡)。
+            u2.finalize_task("Create a note", success=False)
+            # 第二次:该条目被复用(active)但任务仍失败 → F=1。
+            u2._active_entry = entry
+            u2.finalize_task("Create a note", success=False)
+            self.assertEqual(entry.meta.failure_count, 1)
+            T_i, _, _ = compute_memory_risk_score(entry)
+            tau = compute_dynamic_threshold(u2.global_failure_rate)
+            # F=1 时风险分应高于 F=0 时,并足以触发抑制(在默认阈值下)。
+            self.assertGreater(T_i, 0.4)
+
+
 if __name__ == "__main__":
     unittest.main()
