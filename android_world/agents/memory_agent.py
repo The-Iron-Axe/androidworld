@@ -102,6 +102,20 @@ def _action_effect_str(action: Any, ui_elements: Any = None) -> str:
   return str(at)
 
 
+_SLOT_FILL_PROMPT_TEMPLATE = (
+    "You are filling in a text field while replaying a cached trajectory for\n"
+    "an Android GUI agent.  The replayed trajectory reached a text-input step,\n"
+    "but the cached value belongs to a previous task instance.  Look at the\n"
+    "current screen and the task goal, and produce the EXACT text to type into\n"
+    "this field for the CURRENT task.\n\n"
+    "Task goal: {goal}\n\n"
+    "Current screen UI elements:\n{ui_elements}\n\n"
+    "Replayed step index: {step}\n"
+    "Reply with ONLY the text to type — no quotes, no JSON, no explanation.\n"
+    "Your answer:\n"
+)
+
+
 class MemoryAugmentedAgent(m3a_lib.M3A):
   """M3A augmented with orthogonal memory modules.
 
@@ -164,6 +178,10 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self._replay_entry = None
     self._replay_index = 0
     self._replay_trajectory: list[ObsAct] = []
+    # U2 dual-factor precondition: the episode-start screen, frozen on first
+    # action prompt, used as the `pre` key for hint/replay retrieval so stored
+    # and queried Plan(pre, goal) keys stay aligned.
+    self._u2_precondition = ""
 
   # ── Per-episode memory stats (consumed by suite_utils for result files) ─
 
@@ -201,6 +219,7 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self._replay_entry = None
     self._replay_index = 0
     self._replay_trajectory = []
+    self._u2_precondition = ""
     for mem in (self.u2, self.u3, self.u4):
       if mem is None:
         continue
@@ -240,8 +259,14 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       # single-agent runs stored under (_current_goal).  A Plan prefix in the
       # key would degrade dual-factor similarity and break the 2x2 ablation
       # symmetry between the single- and multi-agent conditions.
+      # Dual-factor precondition (DMS §3.2.2): freeze the episode-start screen
+      # and pass it as `pre` so stored and queried Plan(pre, goal) keys stay
+      # aligned and cross-task matching can anchor on the starting UI.
       retrieve_goal = getattr(self, "_current_goal", "") or goal
-      hint = self.u2.retrieve_hint(retrieve_goal)
+      precondition = self._u2_ensure_precondition(ui_elements_list)
+      hint = self.u2.retrieve_hint(
+          retrieve_goal, precondition=precondition or None
+      )
       if hint:
         memory_blocks.append(f"## Memory Hint (U2)\nSimilar past trajectory: {hint}")
 
@@ -393,6 +418,39 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return
     self._pending_trajectory_goal = goal
 
+  # ── U2 dual-factor precondition (episode-start screen key) ───────────
+
+  def _u2_ensure_precondition(self, ui_elements_list: str) -> str:
+    """Return the frozen episode-start screen key, capturing it on first call.
+
+    Called from _build_action_prompt with the current UI element list.  The
+    first call (episode start) freezes the screen text into
+    `self._u2_precondition`; the same key is then reused for every U2
+    store/retrieve within the episode, so stored and queried Plan(pre, goal)
+    keys stay aligned.
+    """
+    if not self._u2_precondition and ui_elements_list:
+      self._u2_precondition = build_screen_summary(ui_elements_list)[:2000]
+    return self._u2_precondition
+
+  def _current_screen_precondition(self) -> str:
+    """Build a screen key from the current env state (replay path).
+
+    The U2 replay check in step() runs before _build_action_prompt, so it must
+    capture the starting screen itself instead of reusing the prompt's UI list.
+    Uses a non-stabilized get_state to avoid an extra stabilization wait.
+    """
+    try:
+      state = self.env.get_state(wait_to_stabilize=False)
+      logical_screen_size = self.env.logical_screen_size
+      ui_list = m3a_lib._generate_ui_elements_description_list(
+          state.ui_elements, logical_screen_size
+      )
+      return build_screen_summary(ui_list)[:2000]
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.warning("U2 precondition capture failed: %s", e)
+      return ""
+
   # ── Sub-plan decomposition seam (Planner placeholder) ──────────────────
   #
   # This is the extension point for the future multi-agent design.  The
@@ -450,7 +508,9 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       ))
 
     if len(trajectory) > 1:
-      self.u2.add_trajectory(goal, trajectory)
+      self.u2.add_trajectory(
+          goal, trajectory, precondition=self._u2_precondition or ""
+      )
       self.u2.finalize_task(goal, success=success)
 
   def _flush_u4_trajectory(self, success: bool) -> None:
@@ -539,6 +599,7 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
         json_action.CLICK,
         json_action.DOUBLE_TAP,
         json_action.LONG_PRESS,
+        json_action.INPUT_TEXT,
     ):
       return action
     if action.index is None:
@@ -566,6 +627,33 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       rebound.index = matches[0][0]
       return rebound
     return action
+
+  def _fill_replay_slot(
+      self, goal: str, ui_elements_list: str, step_index: int
+  ) -> str | None:
+    """Ask the LLM for the text to type into a parameterized input_text slot.
+
+    The cached trajectory holds the *old* instance's value (a 07:00 alarm, a
+    filename, ...).  Replaying it verbatim would write stale parameters into
+    the current task.  Instead we stop at the slot, ask the LLM to fill it
+    against the current screen + goal, then continue replay.  Pure-text call
+    (no screenshot) per the slot-replay design.
+
+    Returns the typed text, or None if the LLM produced nothing usable — the
+    caller then ends replay and hands control back to the main loop.
+    """
+    prompt = _SLOT_FILL_PROMPT_TEMPLATE.format(
+        goal=goal,
+        ui_elements=ui_elements_list if ui_elements_list else "Not available",
+        step=step_index,
+    )
+    try:
+      output, _is_safe, _raw = self.llm.predict_mm(prompt, [])
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.warning("U2 [%s] — slot-fill LLM failed: %s", goal, e)
+      return None
+    text = (output or "").strip()
+    return text if text else None
 
   def _end_replay(self) -> None:
     """Terminate replay and drop the buffered goal so nothing is re-stored."""
@@ -624,6 +712,59 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       self.history.append(step_data)
       return done, step_data
 
+    if action.action_type == json_action.INPUT_TEXT:
+      # 参数槽:缓存的旧值(07:00 闹钟、文件名…)属于上个任务实例,直接回放
+      # 会把旧参数写进当前任务。停下,让 LLM 对着当前屏幕 + 目标现填,
+      # 填完继续回放后续导航动作(插槽回放)。
+      try:
+        state = self.get_post_transition_state()
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.warning("U2 [%s] — slot-fill state capture failed: %s", goal, e)
+        state = None
+      ui_list = ""
+      if state is not None:
+        logical_screen_size = self.env.logical_screen_size
+        ui_list = m3a_lib._generate_ui_elements_description_list(
+            state.ui_elements, logical_screen_size
+        )
+      text = self._fill_replay_slot(goal, ui_list, self._replay_index)
+      if text is None:
+        # 填槽失败(LLM 无输出/异常):终止回放,交回主循环,不阻塞。
+        self._end_replay()
+        step_data["action_output_json"] = None
+        step_data["summary"] = (
+            "Replay slot-fill failed — cached parameters are instance-specific; "
+            "resuming LLM control."
+        )
+        self.history.append(step_data)
+        return False, step_data
+      # 用当前目标文本构造新动作;index 重绑到当前屏幕的文本框。
+      filled = json_action.JSONAction(
+          action_type=json_action.INPUT_TEXT,
+          text=text,
+          index=action.index,
+      )
+      if filled.index is not None and state is not None:
+        filled = self._resolve_action_target(filled, state.ui_elements)
+      step_data["action_output_json"] = filled
+      try:
+        self.env.execute_action(filled)
+        time.sleep(self.wait_after_action_seconds)
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        logging.warning("U2 [%s] — replay slot-fill action failed: %s", goal, e)
+        step_data["summary"] = f"Replay slot-fill action failed: {e}"
+        self.history.append(step_data)
+        self._end_replay()
+        return False, step_data
+      remaining = len(trajectory) - self._replay_index
+      step_data["summary"] = (
+          f"Replayed slot-fill {self._replay_index}/{len(trajectory)}: typed "
+          f"{text!r}; {remaining} remaining."
+      )
+      self.history.append(step_data)
+      # 注意:不 _end_replay()——继续回放后续导航动作。
+      return False, step_data
+
     if action.action_type in (
         json_action.CLICK,
         json_action.DOUBLE_TAP,
@@ -668,8 +809,16 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     # First step of the task with U2 enabled: try deterministic replay for
     # each sub-plan.
     if self.enable_u2 and self.u2 is not None and len(self.history) == 0:
+      # Replay runs before _build_action_prompt, so capture the episode-start
+      # screen key here — otherwise the replay query's Plan(pre, goal) would
+      # carry an empty `pre` and never match stored trajectories.
+      if not self._u2_precondition:
+        self._u2_precondition = self._current_screen_precondition()
       for plan in self._decompose_into_subplans(goal):
-        trajectory = self.u2.retrieve_sub_plan_replay(plan)
+        replay_plan = Plan(
+            precondition=self._u2_precondition or "", goal=plan.goal
+        )
+        trajectory = self.u2.retrieve_sub_plan_replay(replay_plan)
         if trajectory:
           self._start_replay(trajectory, self.u2._active_entry)
           done, step_data = self._step_replay(goal)

@@ -261,3 +261,83 @@ class TestReplay(unittest.TestCase):
     )
     # step() 直接走 M3A LLM 路径；_replay_active 保持 False
     self.assertFalse(agent._replay_active)
+
+
+class _SlotLLM:
+  """LLM that records slot-fill calls and returns the configured text."""
+
+  def __init__(self, text="08:00"):
+    self.text = text
+    self.calls = []
+
+  def predict_mm(self, prompt, images):
+    self.calls.append((prompt, images))
+    return self.text, True, "raw"
+
+
+def _traj_with_input_text():
+  return [
+      ObsAct(observation="step_0",
+             action=json_action.JSONAction(action_type="open_app", app_name="Clock"),
+             step_index=0),
+      ObsAct(observation="step_1",
+             action=json_action.JSONAction(action_type="click", index=3),
+             step_index=1),
+      ObsAct(observation="step_2",
+             action=json_action.JSONAction(
+                 action_type="input_text", text="07:00", index=5),
+             step_index=2),
+      ObsAct(observation="step_3",
+             action=json_action.JSONAction(action_type="click", index=7),
+             step_index=3),
+  ]
+
+
+class TestSlotReplay(unittest.TestCase):
+  def test_input_text_slot_filled_by_llm_and_replay_continues(self):
+    env = _FakeEnv()
+    llm = _SlotLLM(text="08:00")
+    agent = _make_agent(env, llm)
+    _stub_hit(agent, _traj_with_input_text())
+
+    # 第一步:回放开始,执行 open_app。
+    result = agent.step("create alarm 08:00")
+    self.assertFalse(result.done)
+
+    # 第二步:click。
+    result = agent.step("create alarm 08:00")
+    self.assertFalse(result.done)
+
+    # 第三步:input_text —— 填槽:调 LLM,得到 08:00,替换旧值 07:00。
+    result = agent.step("create alarm 08:00")
+    self.assertFalse(result.done)
+    self.assertEqual(len(llm.calls), 1)
+    filled = result.data["action_output_json"]
+    self.assertEqual(filled.action_type, "input_text")
+    self.assertEqual(filled.text, "08:00")
+    # 回放不终止:填槽后仍有步骤要执行。
+    self.assertTrue(agent._replay_active)
+
+    # 第四步:继续回放后续 click。
+    result = agent.step("create alarm 08:00")
+    self.assertFalse(result.done)
+
+    # 轨迹耗尽:回放结束。
+    result = agent.step("create alarm 08:00")
+    self.assertTrue(result.done)
+    self.assertFalse(agent._replay_active)
+
+  def test_slot_fill_llm_failure_ends_replay(self):
+    env = _FakeEnv()
+    llm = _SlotLLM(text="")  # 空输出 → 填槽失败
+    agent = _make_agent(env, llm)
+    _stub_hit(agent, _traj_with_input_text())
+
+    agent.step("create alarm 08:00")  # open_app
+    agent.step("create alarm 08:00")  # click
+    result = agent.step("create alarm 08:00")  # input_text
+    self.assertFalse(result.done)
+    self.assertEqual(result.data["action_output_json"], None)
+    self.assertFalse(agent._replay_active)
+    self.assertIn("slot-fill failed", result.data["summary"])
+
