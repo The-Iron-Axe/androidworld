@@ -245,12 +245,24 @@ def _filter_tasks(
 def _collect_token_usage(
     agent: base_agent.EnvironmentInteractingAgent,
 ) -> dict[str, int] | None:
-  """Pull the episode's LLM token counter off the agent's wrapper, if any."""
+  """Pull the episode's LLM token + call counters off the agent's wrapper.
+
+  Returns the token accumulator plus (if present) the global call count and the
+  per-module call breakdown.  Absent counters are just omitted so agents built
+  on older wrappers keep producing the plain token dict.
+  """
   llm = getattr(agent, 'llm', None)
   if llm is None:
     return None
   try:
-    return llm.token_usage
+    out = dict(llm.token_usage)
+    nc = getattr(llm, 'num_calls', None)
+    if nc is not None:
+      out['num_calls'] = nc
+    mc = getattr(llm, 'module_calls', None)
+    if mc:
+      out['module_calls'] = mc
+    return out
   except Exception:  # pylint: disable=broad-exception-caught
     return None
 

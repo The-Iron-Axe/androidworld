@@ -315,10 +315,13 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
         goal=goal,
         screen=ui_elements_list[:1500] if ui_elements_list else "not available",
     )
+    self.llm.begin_module('planner')
     try:
       output, _is_safe, _raw = self.llm.predict_mm(prompt, [])
     except Exception as e:  # pylint: disable=broad-exception-caught
       output = f"SUBGOALS:\n1. {goal}"
+    finally:
+      self.llm.end_module()
 
     subgoals, conditions, checklist = _parse_plan_output(output)
     self._planner_state = PlannerState(
@@ -359,10 +362,13 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
         satisfied=", ".join(sorted(satisfied)) or "none",
         stalled_subgoal=stalled,
     )
+    self.llm.begin_module('planner')
     try:
       output, _is_safe, _raw = self.llm.predict_mm(prompt, [])
     except Exception as e:  # pylint: disable=broad-exception-caught
       return  # give up on replan; keep executing current subgoal
+    finally:
+      self.llm.end_module()
     subgoals, conditions, checklist = _parse_plan_output(output)
     if state is None:
       state = PlannerState()

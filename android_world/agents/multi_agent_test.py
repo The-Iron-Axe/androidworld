@@ -27,6 +27,12 @@ class _MockLlm(infer.MultimodalLlmWrapper):
     self.responses = list(responses)
     self.calls: list[tuple[str, list[np.ndarray]]] = []
 
+  def begin_module(self, module: str) -> None:
+    pass
+
+  def end_module(self) -> None:
+    pass
+
   def predict_mm(
       self, text_prompt: str, images: list[np.ndarray]
   ) -> tuple[str, Any]:
@@ -264,6 +270,12 @@ class _ScriptedLlm(infer.MultimodalLlmWrapper):
   def __init__(self, responses: list[str]):
     self.responses = list(responses)
     self.index = 0
+
+  def begin_module(self, module: str) -> None:
+    pass
+
+  def end_module(self) -> None:
+    pass
 
   def predict_mm(self, text_prompt: str, images):
     if self.index < len(self.responses):

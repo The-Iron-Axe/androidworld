@@ -400,10 +400,21 @@ def _save_results(results, phase, run_id, results_dir='') -> str:
       os.path.dirname(os.path.abspath(__file__)), 'results')
   os.makedirs(out_dir, exist_ok=True)
   path = os.path.join(out_dir, f'{run_id}_{phase}.json')
+  def _call_sum(results):
+    total = 0
+    mods: dict[str, int] = {}
+    for e in results:
+      tu = e.get('token_usage') or {}
+      total += tu.get('num_calls') or 0
+      for k, v in (tu.get('module_calls') or {}).items():
+        mods[k] = mods.get(k, 0) + (v or 0)
+    return total, mods
+  total_calls, module_calls = _call_sum(results)
   data = {
       'run_id': run_id, 'phase': phase,
       'saved_at': time.strftime('%Y-%m-%d %H:%M:%S'),
       'total': len(results), 'success': _count_success(results),
+      'total_num_calls': total_calls, 'module_num_calls': module_calls,
       'episodes': [
           {'task_template': e.get('task_template', ''), 'goal': e.get('goal', ''),
            'is_successful': e.get('is_successful'),
@@ -530,6 +541,8 @@ def main(argv):
   # Per-config success rates across all seeds, for the final mean±std summary.
   # key: config name -> list of (success, total) per seed.
   across_seeds: dict[str, list[tuple[int, int]]] = {}
+  # Total LLM API calls (per module) across all 验证轮 phases, all seeds.
+  verify_module_calls: dict[str, int] = {}
 
   for seed in seeds:
     seed_suffix = f'seed{seed}'
@@ -583,6 +596,10 @@ def main(argv):
       across_seeds.setdefault(cfg, []).append(
           (_count_success(results), len(results))
       )
+      for _ep in results:
+        tu = _ep.get('token_usage') or {}
+        for k, v in (tu.get('module_calls') or {}).items():
+          verify_module_calls[k] = verify_module_calls.get(k, 0) + (v or 0)
 
     # Restore store flags for the next seed.
     FLAGS.u2_store = prev_store_u2
@@ -605,6 +622,11 @@ def main(argv):
     total_ok = sum(ok for ok, _ in across_seeds[cfg])
     total_n = sum(t for _, t in across_seeds[cfg])
     print(f'  {cfg:8s}: {mean:.3f} ± {std:.3f}  ({total_ok}/{total_n} episodes)')
+  if verify_module_calls:
+    total = sum(verify_module_calls.values())
+    breakdown = ', '.join(
+        f'{k}={v}' for k, v in sorted(verify_module_calls.items()))
+    print(f'  Total LLM API calls (verify): {total}  [{breakdown}]')
   print(f'\nRun ID {run_id}: per-phase results in scripts/results/')
 
 

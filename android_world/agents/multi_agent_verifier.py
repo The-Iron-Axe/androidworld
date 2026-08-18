@@ -178,10 +178,13 @@ def verify_action(
   if after_image is not None:
     images.append(after_image)
 
+  llm.begin_module('av')
   try:
     output, _is_safe, _raw = llm.predict_mm(prompt, images)
   except Exception as e:  # pylint: disable=broad-exception-caught
     return ActionVerdict("NO_EFFECT", f"LLM call failed: {e}")
+  finally:
+    llm.end_module()
 
   # Fail-closed: unparseable / NO_RESPONSE must not draw U3 edges as CORRECT.
   verdict = _parse_verdict_line(output, ACTION_VERDICTS, default="NO_EFFECT")
@@ -250,10 +253,13 @@ def audit_progress(
       after_elements=_format_elements(after_elements),
   )
   images = [after_image] if after_image is not None else []
+  llm.begin_module('pa')
   try:
     output, _is_safe, _raw = llm.predict_mm(prompt, images)
   except Exception as e:  # pylint: disable=broad-exception-caught
     return ProgressVerdict("STALLED", evidence=f"LLM call failed: {e}")
+  finally:
+    llm.end_module()
 
   verdict = _parse_verdict_line(output, PROGRESS_VERDICTS, default="STALLED")
   new_satisfied = _parse_new_satisfied(output)
@@ -316,12 +322,15 @@ def certify_evidence(
       final_elements=_format_elements(final_elements),
   )
   images = [final_image] if final_image is not None else []
+  llm.begin_module('ec')
   try:
     output, _is_safe, _raw = llm.predict_mm(prompt, images)
   except Exception as e:  # pylint: disable=broad-exception-caught
     results = {i.item_id: "NO_EVIDENCE" for i in checklist}
     _log(f"[EC] LLM call failed: {e} -> overall=False (fail closed)")
     return EvidenceResult(results, False, f"LLM call failed: {e}")
+  finally:
+    llm.end_module()
 
   results = _parse_cert_items(output, checklist)
   # Fail closed: the final verdict is driven by the per-item results (missing

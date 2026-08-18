@@ -64,13 +64,38 @@ class LlmWrapper(abc.ABC):
 
   def __init__(self):
     self._token_usage = {'prompt': 0, 'completion': 0, 'cache_hit': 0}
+    self._num_calls = 0
+    self._module_calls: dict[str, int] = {}
+    self._current_module: str | None = None
 
   def reset_token_usage(self) -> None:
     self._token_usage = {'prompt': 0, 'completion': 0, 'cache_hit': 0}
+    self._num_calls = 0
+    self._module_calls = {}
+    self._current_module = None
 
   @property
   def token_usage(self) -> dict[str, int]:
     return dict(self._token_usage)
+
+  @property
+  def num_calls(self) -> int:
+    return self._num_calls
+
+  @property
+  def module_calls(self) -> dict[str, int]:
+    return dict(self._module_calls)
+
+  def begin_module(self, module: str) -> None:
+    self._current_module = module
+
+  def end_module(self) -> None:
+    self._current_module = None
+
+  def _record_call(self, module: str | None = None) -> None:
+    self._num_calls += 1
+    key = module or self._current_module or 'main'
+    self._module_calls[key] = self._module_calls.get(key, 0) + 1
 
   def _record_usage(self, usage: dict | None) -> None:
     if not usage:
@@ -308,6 +333,7 @@ class Gpt4Wrapper(LlmWrapper, MultimodalLlmWrapper):
     self.max_retry = min(max_retry, 5)
     self.temperature = temperature
     self.model = model_name
+    super().__init__()
 
   @classmethod
   def encode_image(cls, image: np.ndarray) -> str:
@@ -363,6 +389,9 @@ class Gpt4Wrapper(LlmWrapper, MultimodalLlmWrapper):
             timeout=self.REQUEST_TIMEOUT_SECONDS,
         )
         if response.ok and 'choices' in response.json():
+          # Count this as one successful API call (independent of whether the
+          # provider returned a `usage` block).
+          self._record_call()
           # Log AND accumulate token usage (OpenAI-compatible APIs return it in
           # the body).  `_token_usage` is the episode-level counter read by
           # suite_utils at task end; the print keeps a live per-call trace.

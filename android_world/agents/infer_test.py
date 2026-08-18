@@ -131,6 +131,34 @@ class InferTest(absltest.TestCase):
     gpt4v.predict_mm("fake prompt", [])
     self.mock_sleep.assert_called_once()
 
+  def test_gpt4v_module_call_counters(self):
+    llm = infer.Gpt4Wrapper(model_name="gpt-4-turbo-2024-04-09")
+    mock_200_response = requests.Response()
+    mock_200_response.status_code = 200
+    mock_200_response._content = (
+        b'{"choices": [{"message": {"content": "fake response"}}]}'
+    )
+    self.mock_post.return_value = mock_200_response
+
+    llm.begin_module('planner')
+    llm.predict_mm("fake prompt", [])
+    llm.predict_mm("fake prompt", [])
+    llm.end_module()
+
+    llm.begin_module('av')
+    llm.predict_mm("fake prompt", [])
+    llm.end_module()
+
+    llm.predict_mm("fake prompt", [])  # no active module -> 'main'
+
+    self.assertEqual(llm.num_calls, 4)
+    self.assertEqual(llm.module_calls,
+                     {'planner': 2, 'av': 1, 'main': 1})
+
+    llm.reset_token_usage()
+    self.assertEqual(llm.num_calls, 0)
+    self.assertEqual(llm.module_calls, {})
+
 
 if __name__ == "__main__":
   absltest.main()
