@@ -507,11 +507,19 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
           step_index=i,
       ))
 
+    # 对齐论文 Algorithm 1(§3.2.1):失败的执行不作为可执行宏存储,不新增
+    # 完整 τ 条目。失败只贡献统计:若本轮复用命中过记忆(_active_entry 非空),
+    # finalize_task 的复用分支会累积 F_i 与 K_i(抑制 + 潜在 K 淘汰);否则
+    # 仅推进逻辑时钟并落盘。这样 store 里只保留成功轨迹,回放才有意义。
+    if not success:
+      self.u2.finalize_task(goal, success=False)
+      return
+
     if len(trajectory) > 1:
       self.u2.add_trajectory(
           goal, trajectory, precondition=self._u2_precondition or ""
       )
-      self.u2.finalize_task(goal, success=success)
+      self.u2.finalize_task(goal, success=True)
 
   def _flush_u4_trajectory(self, success: bool) -> None:
     """Feed the finished episode's trajectory into U4 (ground-truth outcome).

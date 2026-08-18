@@ -263,6 +263,57 @@ class TestReplay(unittest.TestCase):
     self.assertFalse(agent._replay_active)
 
 
+class _FlushHistoryAgent(memory_agent.MemoryAugmentedAgent):
+  """Agent whose history we can seed directly to exercise _flush_u2_trajectory
+  without running the full M3A step loop."""
+
+  def __init__(self, env, llm):
+    super().__init__(
+        env, llm, enable_u1=False, enable_u2=True, enable_u3=False
+    )
+    self.history = []
+
+
+def _two_step_history():
+  return [
+      {"action_output_json": json_action.JSONAction(
+          action_type="open_app", app_name="Markor")},
+      {"action_output_json": json_action.JSONAction(
+          action_type="click", index=2)},
+  ]
+
+
+class TestFlushOnlyStoresSuccess(unittest.TestCase):
+  """失败执行不创建可执行宏(对齐论文 Algorithm 1 §3.2.1)。"""
+
+  def test_failed_trajectory_not_stored(self):
+    env = _FakeEnv()
+    agent = _FlushHistoryAgent(env, _FakeLLM())
+    agent.history = _two_step_history()
+    before = agent.u2.bank.size
+    agent._flush_u2_trajectory("Create a note", {}, success=False)
+    # 失败:不 add_trajectory,bank 不新增条目。
+    self.assertEqual(agent.u2.bank.size, before)
+
+  def test_failed_trajectory_with_active_hit_penalized(self):
+    """失败但复用命中过(_active_entry 非空)时,仍要累积 F_i。"""
+    env = _FakeEnv()
+    agent = _FlushHistoryAgent(env, _FakeLLM())
+    agent.history = _two_step_history()
+    # 构造一个已命中条目,模拟"复用后失败"。
+    entry = types.SimpleNamespace(
+        meta=types.SimpleNamespace(
+            success_count=0, failure_count=0, reuse_count=0,
+            verification_failures=0,
+        )
+    )
+    agent.u2._active_entry = entry
+    agent.u2._last_added_entry = None
+    agent._flush_u2_trajectory("Create a note", {}, success=False)
+    # 失败命中条目:F_i 累积(抑制机制保留)。
+    self.assertEqual(entry.meta.failure_count, 1)
+
+
 class _SlotLLM:
   """LLM that records slot-fill calls and returns the configured text."""
 
