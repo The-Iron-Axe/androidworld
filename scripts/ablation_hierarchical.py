@@ -135,6 +135,21 @@ flags.DEFINE_bool(
     'Orthogonal to the U1-U4 flags; when off the agent behaves exactly like the '
     'existing memory-augmented agent.',
 )
+flags.DEFINE_bool(
+    'ma_no_planner', False,
+    'Disable the Planner module (decomposition, plan-block injection, replan).')
+flags.DEFINE_bool(
+    'ma_no_av', False,
+    'Disable the Action Verifier module (per-step action check, U3 gating,'
+    ' U4 step credit).')
+flags.DEFINE_bool(
+    'ma_no_pa', False,
+    'Disable the Progress Auditor module (subgoal advancement, stall-replan,'
+    ' progress lines in the plan block).')
+flags.DEFINE_bool(
+    'ma_no_ec', False,
+    'Disable the Evidence Certifier module (completion veto, subgoal cert,'
+    ' success fusion).')
 
 
 # ── Memory construction flags ─────────────────────────────────────────
@@ -237,6 +252,10 @@ def _run_phase(
   )
   if enable_multiagent:
     agent_kwargs['enable_multiagent'] = True
+    agent_kwargs['enable_ma_planner'] = not FLAGS.ma_no_planner
+    agent_kwargs['enable_ma_av'] = not FLAGS.ma_no_av
+    agent_kwargs['enable_ma_pa'] = not FLAGS.ma_no_pa
+    agent_kwargs['enable_ma_ec'] = not FLAGS.ma_no_ec
   agent = agent_cls(**agent_kwargs)
   agent.name = agent_name
 

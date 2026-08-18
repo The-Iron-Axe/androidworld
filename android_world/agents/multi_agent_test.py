@@ -659,5 +659,239 @@ class ProgressAuditorIntegrationTest(absltest.TestCase, _AdbMockMixin):
     self.assertEqual(agent._planner_state.current_idx, 0)
 
 
+class _RecordingScriptedLlm(_ScriptedLlm):
+  """_ScriptedLlm that also records every text prompt it sees."""
+
+  def __init__(self, responses):
+    super().__init__(responses)
+    self.calls = []
+
+  def predict_mm(self, text_prompt, images):
+    self.calls.append(text_prompt)
+    return super().predict_mm(text_prompt, images)
+
+
+def _fake_action(action_type="click", index=0):
+  """Minimal stand-in for the agent's action object."""
+  return type("FakeAction", (), {"action_type": action_type, "index": index})()
+
+
+class ModuleAblationTest(absltest.TestCase, _AdbMockMixin):
+  """No-leak guards: each --ma_no_* flag removes exactly its module's effect."""
+
+  def setUp(self):
+    super().setUp()
+    self._start_adb_mocks()
+
+  def tearDown(self):
+    super().tearDown()
+    self._stop_adb_mocks()
+
+  # ── Constructor ─────────────────────────────────────────────────
+
+  def test_constructor_defaults_to_full_system(self):
+    env = test_utils.FakeAsyncEnv()
+    agent = ma.MultiAgentReflectorAgent(
+        env, _ScriptedLlm([]), enable_multiagent=True)
+    self.assertTrue(agent._ma_planner)
+    self.assertTrue(agent._ma_av)
+    self.assertTrue(agent._ma_pa)
+    self.assertTrue(agent._ma_ec)
+
+  def test_constructor_honors_module_flags(self):
+    env = test_utils.FakeAsyncEnv()
+    agent = ma.MultiAgentReflectorAgent(
+        env, _ScriptedLlm([]), enable_multiagent=True,
+        enable_ma_planner=False, enable_ma_av=False,
+        enable_ma_pa=False, enable_ma_ec=False)
+    self.assertFalse(agent._ma_planner)
+    self.assertFalse(agent._ma_av)
+    self.assertFalse(agent._ma_pa)
+    self.assertFalse(agent._ma_ec)
+
+  # ── Planner ─────────────────────────────────────────────────────
+
+  def test_no_planner_skips_decomposition(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_planner=False)
+    prompt = agent._build_action_prompt("do task", [], "")
+    self.assertNotIn("## Plan", prompt)
+    self.assertIsNone(agent._planner_state)
+    self.assertEqual(len(llm.calls), 0)  # no planner LLM call
+
+  def test_planner_injects_plan_block(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([
+        "SUBGOALS:\n1. open app\n2. set time\n"
+        "PROGRESS_CONDITIONS:\nP1: app open\nP2: time set\n"
+        "ACCEPTANCE:\nA1: alarm: 07:00 [mandatory]",
+    ])
+    agent = ma.MultiAgentReflectorAgent(env, llm, enable_multiagent=True)
+    prompt = agent._build_action_prompt("create alarm", [], "")
+    self.assertIn("## Plan (multi-agent)", prompt)
+    self.assertIn("Current subgoal: open app", prompt)
+
+  def test_no_planner_replan_is_noop(self):
+    env = test_utils.FakeAsyncEnv()
+    agent = ma.MultiAgentReflectorAgent(
+        env, _RecordingScriptedLlm([]), enable_multiagent=True,
+        enable_ma_planner=False)
+    agent._planner_state = None
+    agent._replan_count = 0
+    agent._planner_replan("goal")  # must not resurrect planner state
+    self.assertIsNone(agent._planner_state)
+    self.assertEqual(agent._replan_count, 0)
+
+  # ── Action Verifier (per-step) ──────────────────────────────────
+
+  def test_no_av_removes_action_verify_and_buffers_u3(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_av=False,
+        enable_ma_pa=False, enable_u1=True, enable_u3=True,
+        rag_url="http://test.invalid")
+    step_data = {
+        "u2_replayed": False,
+        "action_output_json": _fake_action("click", 0),
+        "before_ui_elements": [],
+        "after_ui_elements": [],
+        "before_ui_elements_list": "",
+        "after_ui_elements_list": "",
+    }
+    agent._on_step_complete(step_data)
+    self.assertEqual(agent._step_verdicts, [])                # no AV verdict
+    self.assertEqual(agent._last_reflector_feedback, "")      # no AV feedback
+    self.assertEqual(len(agent._pending_u3_transitions), 1)   # U3 buffered
+    self.assertEqual(len(llm.calls), 0)                       # no verifier calls
+
+  def test_av_on_records_verdict(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([
+        "VERDICT: NO_EFFECT\nEVIDENCE: screen unchanged",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_pa=False)
+    step_data = {
+        "u2_replayed": False,
+        "action_output_json": _fake_action("click", 0),
+        "action_reason": "click to open",
+        "before_ui_elements": [],
+        "after_ui_elements": [],
+    }
+    agent._on_step_complete(step_data)
+    self.assertEqual(len(agent._step_verdicts), 1)
+    self.assertIn("Action Verifier", agent._last_reflector_feedback)
+
+  # ── Progress Auditor (plan-block rendering) ─────────────────────
+
+  def test_no_pa_hides_progress_lines_keeps_subgoals(self):
+    env = test_utils.FakeAsyncEnv()
+    agent = ma.MultiAgentReflectorAgent(
+        env, _ScriptedLlm([]), enable_multiagent=True, enable_ma_pa=False)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["open app", "set time"],
+        current_idx=1,
+        ledger=ma.ProgressLedger(
+            conditions=[("P1", "app open"), ("P2", "time set")],
+            satisfied={"P1"},
+        ),
+    )
+    agent._last_reflector_feedback = "Action Verifier: NO_EFFECT — x"
+    block = agent._format_plan_block()
+    self.assertNotIn("Current subgoal", block)
+    self.assertNotIn("Progress satisfied", block)
+    self.assertNotIn("[", block)  # no progression checkboxes
+    self.assertIn("Subgoals: open app → set time", block)
+    self.assertIn("Action Verifier", block)  # AV feedback stays (AV on)
+
+  def test_pa_shows_progress_lines(self):
+    env = test_utils.FakeAsyncEnv()
+    agent = ma.MultiAgentReflectorAgent(
+        env, _ScriptedLlm([]), enable_multiagent=True)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["open app", "set time"],
+        current_idx=1,
+        ledger=ma.ProgressLedger(
+            conditions=[("P1", "app open"), ("P2", "time set")],
+            satisfied={"P1"},
+        ),
+    )
+    block = agent._format_plan_block()
+    self.assertIn("Current subgoal: set time", block)
+    self.assertIn("Progress satisfied: P1", block)
+    self.assertIn("[x] open app", block)
+
+  # ── Progress Auditor (per-step) ─────────────────────────────────
+
+  def test_no_pa_removes_progress_audit(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_pa=False)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["sg1", "sg2"],
+        ledger=ma.ProgressLedger(conditions=[("P1", "c1")]),
+    )
+    step_data = {
+        "u2_replayed": False,
+        "action_output_json": _fake_action("click", 0),
+        "before_ui_elements": [],
+        "after_ui_elements": [],
+    }
+    agent._on_step_complete(step_data)
+    self.assertEqual(agent._planner_state.current_idx, 0)
+    self.assertEqual(agent._stall_steps, 0)
+    self.assertEqual(agent._replan_count, 0)
+    for p in llm.calls:
+      self.assertNotIn("progress auditor", p)
+
+  # ── Evidence Certifier ──────────────────────────────────────────
+
+  def test_no_ec_accepts_done_without_certifier(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_ec=False)
+    agent._planner_state = ma.PlannerState(
+        checklist=[ma.AcceptanceItem("A1", "task", "done", True)],
+    )
+    self.assertTrue(
+        agent._accept_task_done("goal",
+                                {"after_ui_elements": [],
+                                 "after_screenshot_with_som": None}))
+    self.assertIsNone(agent._certified)
+    self.assertEqual(len(llm.calls), 0)  # no EC LLM call
+
+  def test_no_ec_advances_subgoal_without_subgoal_cert(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([
+        "VERDICT: ADVANCING\nNEW_SATISFIED: P2\nEVIDENCE: progressed",
+    ])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_ec=False, enable_u1=True)
+    agent._planner_state = ma.PlannerState(
+        subgoals=["sg1", "sg2"],
+        ledger=ma.ProgressLedger(conditions=[("P1", "c1"), ("P2", "c2")]),
+    )
+    agent._audit_and_advance(
+        {"after_ui_elements": [], "after_screenshot_with_som": None})
+    self.assertEqual(agent._planner_state.current_idx, 1)  # advanced
+    self.assertIn("P2", agent._planner_state.ledger.satisfied)
+    self.assertEqual(len(llm.calls), 1)  # only PA, no subgoal-cert call
+
+  def test_no_ec_flush_does_not_recertify(self):
+    env = test_utils.FakeAsyncEnv()
+    llm = _RecordingScriptedLlm([])
+    agent = ma.MultiAgentReflectorAgent(
+        env, llm, enable_multiagent=True, enable_ma_ec=False)
+    agent._certified = False
+    agent.flush_memory("goal")
+    self.assertFalse(agent._certified)  # not flipped by re-cert
+    self.assertEqual(len(llm.calls), 0)
+
+
 if __name__ == "__main__":
   absltest.main()

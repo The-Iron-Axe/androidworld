@@ -195,6 +195,31 @@ _MULTIAGENT = flags.DEFINE_boolean(
     ' like the existing memory-augmented agent.',
 )
 
+_MA_NO_PLANNER = flags.DEFINE_boolean(
+    'ma_no_planner',
+    False,
+    'Disable the Planner module (decomposition, plan-block injection, replan).'
+    ' Only meaningful with --multiagent.',
+)
+_MA_NO_AV = flags.DEFINE_boolean(
+    'ma_no_av',
+    False,
+    'Disable the Action Verifier module (per-step action check, U3 gating,'
+    ' U4 step credit). Only meaningful with --multiagent.',
+)
+_MA_NO_PA = flags.DEFINE_boolean(
+    'ma_no_pa',
+    False,
+    'Disable the Progress Auditor module (subgoal advancement, stall-replan,'
+    ' progress lines in the plan block). Only meaningful with --multiagent.',
+)
+_MA_NO_EC = flags.DEFINE_boolean(
+    'ma_no_ec',
+    False,
+    'Disable the Evidence Certifier module (completion veto, subgoal cert,'
+    ' success fusion). Only meaningful with --multiagent.',
+)
+
 _SCREENSHOT_SCALE = flags.DEFINE_float(
     'screenshot_scale',
     1.0,
@@ -334,7 +359,12 @@ def _get_agent(
     )
     if _MULTIAGENT.value:
       agent = multi_agent.MultiAgentReflectorAgent(
-          enable_multiagent=True, **agent_kwargs
+          enable_multiagent=True,
+          enable_ma_planner=not _MA_NO_PLANNER.value,
+          enable_ma_av=not _MA_NO_AV.value,
+          enable_ma_pa=not _MA_NO_PA.value,
+          enable_ma_ec=not _MA_NO_EC.value,
+          **agent_kwargs,
       )
     else:
       agent = memory_agent.MemoryAugmentedAgent(**agent_kwargs)

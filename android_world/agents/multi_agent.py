@@ -272,10 +272,18 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       env: interface.AsyncEnv,
       llm: infer.MultimodalLlmWrapper,
       enable_multiagent: bool = False,
+      enable_ma_planner: bool = True,
+      enable_ma_av: bool = True,
+      enable_ma_pa: bool = True,
+      enable_ma_ec: bool = True,
       **kwargs,
   ):
     super().__init__(env, llm, **kwargs)
     self._multiagent = enable_multiagent
+    self._ma_planner = enable_ma_planner
+    self._ma_av = enable_ma_av
+    self._ma_pa = enable_ma_pa
+    self._ma_ec = enable_ma_ec
     self._planner_state: PlannerState | None = None
     self._certified: bool | None = None
     self._cert_report: Any | None = None
@@ -337,6 +345,10 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     """Re-plan remaining subgoals. Stall-driven calls count against MAX_REPLANS;
     Evidence Certifier vetoes pass against_cap=False so they don't burn the budget.
     """
+    # Planner module off: replan must not resurrect planner state (e.g. via the
+    # PA stall path calling this when _planner_state is None).
+    if not self._ma_planner:
+      return
     if against_cap and self._replan_count >= MAX_REPLANS:
       return
     stalled = self._current_subgoal()
@@ -385,10 +397,11 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     if not self._multiagent:
       return super()._build_action_prompt(goal, history_lines, ui_elements_list)
 
-    # First step: plan once.  U2 replay steps return before this hook, so the
-    # first call after a replay may already have history — rely on the planner
-    # state being unset, not on an empty history.
-    if self._planner_state is None:
+    # First step: plan once (only when the Planner module is enabled).
+    # U2 replay steps return before this hook, so the first call after a
+    # replay may already have history — rely on the planner state being unset,
+    # not on an empty history.
+    if self._ma_planner and self._planner_state is None:
       self._planner_plan(goal, ui_elements_list)
 
     plan_block = self._format_plan_block()
@@ -401,15 +414,21 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     if state is None:
       return ""
     lines = ["## Plan (multi-agent)"]
-    lines.append(f"Current subgoal: {self._current_subgoal()}")
+    # "Current subgoal", progression checkboxes and "Progress satisfied" are
+    # Progress Auditor products: they disappear under −PA.  The subgoal list
+    # itself is a Planner product and stays.  Verifier Feedback is AV's.
+    if self._ma_pa:
+      lines.append(f"Current subgoal: {self._current_subgoal()}")
     if state.subgoals:
-      lines.append(
-          "Subgoals: " + " → ".join(
-              f"[{'x' if i < state.current_idx else ' '}] {g}"
-              for i, g in enumerate(state.subgoals)
-          )
-      )
-    if state.ledger.satisfied:
+      if self._ma_pa:
+        rendered = " → ".join(
+            f"[{'x' if i < state.current_idx else ' '}] {g}"
+            for i, g in enumerate(state.subgoals)
+        )
+      else:
+        rendered = " → ".join(state.subgoals)
+      lines.append("Subgoals: " + rendered)
+    if self._ma_pa and state.ledger.satisfied:
       lines.append(
           "Progress satisfied: " + ", ".join(sorted(state.ledger.satisfied))
       )
@@ -421,6 +440,8 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
 
   def _accept_task_done(self, goal: str, step_data: dict[str, Any]) -> bool:
     if not self._multiagent:
+      return True
+    if not self._ma_ec:
       return True
     ok = self._certify_global(goal, step_data)
     self._certified = ok
@@ -455,17 +476,27 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       return
 
     # (2) Action Verifier → gate U3 edge drawing + Executor feedback on miss.
-    verdict = self._verify_step_action(step_data)
-    self._step_verdicts.append(verdict)
-    self._apply_u3_gate(step_data, verdict)
-    self._apply_av_feedback(verdict)
+    #     With AV off the U3 path reverts to the single-agent behavior:
+    #     super()._on_step_complete buffers all transitions (flushed on
+    #     episode GT success) instead of AV-gated immediate drawing.
+    if self._ma_av:
+      verdict = self._verify_step_action(step_data)
+      self._step_verdicts.append(verdict)
+      self._apply_u3_gate(step_data, verdict)
+      self._apply_av_feedback(verdict)
+    else:
+      super()._on_step_complete(step_data)
 
     # (3) Progress Auditor → advance U1.completed only if the subgoal-level
     #     Evidence Certifier also passes (ordering: ADVANCING → certify).
-    self._audit_and_advance(step_data)
+    if self._ma_pa:
+      self._audit_and_advance(step_data)
 
-    # (4) Replicate super()'s U1 bookkeeping (app/page/last_action).
-    self._update_u1_bookkeeping(step_data)
+    # (4) Replicate super()'s U1 bookkeeping (app/page/last_action).  With AV
+    #     off, super()._on_step_complete already did it — skip to avoid a
+    #     double U1 write.
+    if self._ma_av:
+      self._update_u1_bookkeeping(step_data)
 
   def _apply_av_feedback(self, verdict: Any) -> None:
     """Feed non-CORRECT AV outcomes to the Executor. Stall counting is PA-owned."""
@@ -578,7 +609,9 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       self._stall_steps = 0
       new_satisfied = pv.new_satisfied
       # Ordering (appendix): ADVANCING → Evidence(子目标) → only then ledger/subgoal.
-      if self._certify_current_subgoal(step_data):
+      # The subgoal certifier belongs to the Evidence Certifier module: it is
+      # skipped (short-circuited True) when EC is off.
+      if (not self._ma_ec) or self._certify_current_subgoal(step_data):
         if new_satisfied:
           state.ledger.satisfied.update(new_satisfied)
           state.ledger.recompute_signature()
@@ -671,7 +704,7 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
       super()._on_task_done(goal, step_data)
       return
     # Certification already set _certified in _accept_task_done for complete.
-    if self._certified is None:
+    if self._ma_ec and self._certified is None:
       self._certified = self._certify_global(goal, step_data)
     super()._on_task_done(goal, step_data)  # U2 buffer
 
@@ -702,7 +735,7 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
     # Max-steps (or any non-accepted end): always re-certify against the last
     # known state.  A prior completion veto leaves _certified=False; that must
     # not permanently block GT fusion / U2-U4 writes.
-    if self._certified is not True:
+    if self._ma_ec and self._certified is not True:
       self._certified = self._certify_global_from_history(goal)
     super().flush_memory(goal)
 
@@ -724,7 +757,7 @@ class MultiAgentReflectorAgent(mem.MemoryAugmentedAgent):
   # ── Episode-success fusion: internal certification vetoes external truth ─
 
   def set_episode_success(self, success: bool) -> None:
-    if self._multiagent and self._certified is not None:
+    if self._multiagent and self._ma_ec and self._certified is not None:
       success = success and self._certified
     super().set_episode_success(success)
 
