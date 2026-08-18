@@ -58,8 +58,7 @@ Write-Host "==> 启动消融 (scripts/ablation_hierarchical.py) ..."
     --tasks=$EvalTasks `
     --seeds=$Seeds `
     --record_rounds=$RecordRounds `
-    --rag_url=$RagUrl `
-    --rag_on
+    --rag_url=$RagUrl
 
 if ($LASTEXITCODE -ne 0) {
   Write-Error "消融运行失败 (exit=$LASTEXITCODE)。见上方报错。"

@@ -99,20 +99,13 @@ flags.DEFINE_string(
     'u4_store', os.path.join(_REPO_ROOT, 'u4_store'),
     'Shared U4 skill-library store.',
 )
-flags.DEFINE_bool(
-    'rag_on',
-    False,
-    'Enable U3 remote RAG (AutoDL page-graph). Default OFF: without this flag '
-    'U3 is disabled everywhere (accumulate + verify), so the run needs no '
-    'AutoDL tunnel. Pass --rag_on (+ valid --rag_url / RAG_URL) to turn U3 '
-    'on; configs that request U3 (u123, u1234) then draw real page-graph '
-    'guidelines. --norag_on is the default no-op alias.',
-)
 flags.DEFINE_list(
     'configs',
     ['u12', 'u123', 'u1234'],
-    'Which configs to evaluate in 验证轮. Choices: u12, u123, u1234. '
-    'Default runs all three.',
+    'Which configs to evaluate in 验证轮. Choices: u1, u12, u123, u1234. '
+    'U3 is on whenever any config contains it (u123 / u1234) — the '
+    'accumulate phase enables U3 too so its page graph matures. '
+    'No separate --rag_on switch.',
 )
 flags.DEFINE_string(
     'rag_url', '',
@@ -222,12 +215,6 @@ def _run_phase(
 
   agent_cls = (multi_agent.MultiAgentReflectorAgent if enable_multiagent
                else memory_agent.MemoryAugmentedAgent)
-  # U3 is opt-in: without --rag_on it stays off everywhere (accumulate +
-  # verify), so a default run needs no AutoDL tunnel.
-  if not FLAGS.rag_on and enable_u3:
-    print('U3 disabled (no --rag_on). Config requesting U3 runs without it; '
-          'pass --rag_on + --rag_url/RAG_URL to enable AutoDL page-graph.')
-    enable_u3 = False
   rag_url = ''
   if enable_u3:
     rag_url = (
@@ -510,7 +497,8 @@ def main(argv):
     print(f'Results + run.log -> {results_dir}')
   else:
     print('Results -> scripts/results/  (default; set --results_dir to override)')
-  print(f'U3 RAG: {"on (--rag_on)" if FLAGS.rag_on else "off (default; pass --rag_on to enable)"}')
+  u3_any = any(CONFIGS[cfg]['u3'] for cfg in FLAGS.configs)
+  print(f'U3 RAG: {"on (configs request u123/u1234)" if u3_any else "off (no config uses U3)"}')
 
   # By design the accumulation and verification task sets are the same by
   # default (eval tasks need prior experience in the store).  Warn only if a
@@ -569,7 +557,7 @@ def main(argv):
       suite = build_suite(s, record_tasks)
       _run_phase_and_save(
           env, suite, suite_utils, f'acc_r{r}_seed{seed}',
-          True, True, True, True, run_id, store_stage=True,
+          True, True, u3_any, True, run_id, store_stage=True,
           enable_multiagent=FLAGS.multiagent,
           results_dir=results_dir,
       )

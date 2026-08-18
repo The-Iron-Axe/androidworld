@@ -101,7 +101,6 @@ def main() -> int:
       '--seeds=' + args.seeds,
       '--record_rounds=%d' % args.record_rounds,
       '--rag_url=' + args.rag_url,
-      '--rag_on',
   ]
   print('\n[run_ablation] launching: ' + ' '.join(cmd) + '\n')
   start = time.time()
