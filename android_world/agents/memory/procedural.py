@@ -25,7 +25,12 @@ from __future__ import annotations
 from typing import Any
 
 from android_world.agents.memory.skill import Skill, SkillLibrary
-from android_world.agents.memory.skill_mining import mine_skills
+from android_world.agents.memory.skill_mining import (
+    _abstract_goal_hint,
+    _leaf_to_action,
+    mine_skills,
+    tokenize_trajectory,
+)
 
 
 class ProceduralMemory:
@@ -90,36 +95,75 @@ class ProceduralMemory:
   def mine(self) -> int:
     """Abstract buffered trajectories into skills; commit them.
 
-    Successful trajectories become positive skills; failed ones become
-    negative "avoid" skills (kind="negative").  Returns the number of new
-    skills added (both kinds).  Candidate skills are committed only when they
-    clear a structural sanity check (non-empty procedure).  Retrieval scoring
-    is delegated to SkillLibrary.
+    Trajectories are grouped by their abstracted goal hint (task family) and
+    each group is mined.  Under the single-round budget every buffered
+    trajectory is consumed immediately — a lone trajectory becomes a reference
+    skill, several of the same family go through BPE / slot abstraction
+    (which needs cross-trajectory signal).  Returns the number of new skills
+    added (both kinds).  Candidate skills are committed only when they clear
+    a structural sanity check (non-empty procedure).
     """
     added = 0
-    if self._buffer:
-      added += self._mine_batch(
-          self._buffer, kind="positive", clear=True
-      )
-    if self._failed_buffer:
-      added += self._mine_batch(
-          self._failed_buffer, kind="negative", clear=True
-      )
+    self._buffer, n = self._mine_grouped(self._buffer, kind="positive")
+    added += n
+    self._failed_buffer, n = self._mine_grouped(self._failed_buffer, kind="negative")
+    added += n
     return added
 
-  def _mine_batch(
+  def _mine_grouped(
       self,
       buffer: list[tuple[str, list, str]],
       kind: str,
-      clear: bool,
-  ) -> int:
-    """Mine one buffer batch (positive or negative) and commit the skills."""
-    if not buffer:
-      return 0
-    trajectories = [acts for _, acts, _ in buffer]
-    goal_hints = [g for g, _, _ in buffer]
-    preconditions = [p for _, _, p in buffer]
+  ) -> tuple[list[tuple[str, list, str]], int]:
+    """Group buffered trajectories by abstracted goal hint and mine each group.
 
+    Under the single-round budget (方案 X) every buffered trajectory is mined
+    immediately — a lone trajectory becomes a reference skill, several of the
+    same family go through cross-trajectory abstraction.  Returns
+    (remaining_buffer, skills_added); remaining is empty here since every
+    buffered entry is consumed.
+    """
+    if not buffer:
+      return buffer, 0
+    groups: dict[str, list[tuple[str, list, str]]] = {}
+    for goal, acts, pre in buffer:
+      groups.setdefault(_abstract_goal_hint(goal), []).append((goal, acts, pre))
+    added = 0
+    for goal_hint, items in groups.items():
+      added += self._mine_group(goal_hint, items, kind)
+    return [], added
+
+  def _mine_group(
+      self,
+      goal_hint: str,
+      items: list[tuple[str, list, str]],
+      kind: str,
+  ) -> int:
+    """Mine one task-family group and commit its skill(s). Returns added.
+
+    A single trajectory is tokenized as-is into a reference skill (no BPE —
+    there is no cross-trajectory signal to merge).  Two or more trajectories
+    go through the full mine_skills abstraction (BPE + slot extraction).
+    """
+    if len(items) == 1:
+      _, acts, pre = items[0]
+      tokens = tokenize_trajectory(acts)
+      actions = [_leaf_to_action(t, []) for t in tokens]
+      if not actions:
+        return 0
+      self.library.add_skill(Skill(
+          goal_hint=goal_hint,
+          precondition=pre,
+          actions=actions,
+          slots=[],
+          score=1.0,
+          kind=kind,
+      ))
+      return 1
+
+    trajectories = [acts for _, acts, _ in items]
+    goal_hints = [g for g, _, _ in items]
+    preconditions = [p for _, _, p in items]
     candidates = mine_skills(
         trajectories,
         goal_hints,
@@ -134,9 +178,6 @@ class ProceduralMemory:
         continue
       self.library.add_skill(sk)
       added += 1
-    self._last_mined = len(buffer)
-    if clear:
-      buffer.clear()
     return added
 
   # ── Retrieval ──────────────────────────────────────────────────────
@@ -144,11 +185,14 @@ class ProceduralMemory:
   def _score_skill(self, skill: Skill, goal: str, precondition: str) -> float:
     """Dual-factor similarity of a skill to the query, aligned with U2.
 
-    goal_hint and precondition are matched by exact string similarity here
-    (fallback when no embedder is set); subclasses or callers can swap in an
-    embedding backend.  Returns a value in [0, 1].
+    Both the query goal and the stored goal_hint are abstracted to the same
+    task-family space before matching, so a concrete instance ("delete the
+    note named bold_king_edited") aligns with the stored category hint
+    ("delete the note named X").  precondition and goal are matched by exact
+    string similarity here (fallback when no embedder is set); subclasses or
+    callers can swap in an embedding backend.  Returns a value in [0, 1].
     """
-    g = goal.lower().strip()
+    g = _abstract_goal_hint(goal).lower().strip()
     gh = skill.goal_hint.lower().strip()
     goal_sim = 1.0 if g == gh else (0.0 if not g or not gh else _token_overlap(g, gh))
     p = precondition.lower().strip()
