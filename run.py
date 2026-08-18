@@ -220,6 +220,14 @@ _MA_NO_EC = flags.DEFINE_boolean(
     ' success fusion). Only meaningful with --multiagent.',
 )
 
+_MEM_AS_AGENT = flags.DEFINE_boolean(
+    'mem_as_agent',
+    False,
+    'Distill the U1-U4 memory context through a standalone MemoryNode LLM '
+    'pass (memory-as-agent) instead of static single-module injection. '
+    'Charged to a dedicated mem module in the per-module call accounting.',
+)
+
 _SCREENSHOT_SCALE = flags.DEFINE_float(
     'screenshot_scale',
     1.0,
@@ -356,6 +364,7 @@ def _get_agent(
         u4_persistence_dir=_U4_PERSISTENCE_DIR.value,
         rag_url=rag_url,
         screenshot_scale=_SCREENSHOT_SCALE.value,
+        mem_as_agent=_MEM_AS_AGENT.value,
     )
     if _MULTIAGENT.value:
       agent = multi_agent.MultiAgentReflectorAgent(

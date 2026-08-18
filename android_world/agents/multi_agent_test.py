@@ -16,8 +16,32 @@ from typing import Any
 
 from absl.testing import absltest
 from android_world.agents import infer
+from android_world.agents import memory_agent
 from android_world.agents import multi_agent_verifier as mav
 import numpy as np
+
+
+class _ModuleRecordingLlm(infer.MultimodalLlmWrapper):
+  """Records prompt + active module per predict_mm call (for MemoryNode)."""
+
+  def __init__(self, responses: list[str]):
+    self.responses = list(responses)
+    self.module = None
+    self.modules: list[str] = []
+    self.prompts: list[str] = []
+
+  def begin_module(self, module: str) -> None:
+    self.module = module
+
+  def end_module(self) -> None:
+    self.module = None
+
+  def predict_mm(self, text_prompt: str, images):
+    self.prompts.append(text_prompt)
+    self.modules.append(self.module)
+    if self.responses:
+      return self.responses.pop(0), None, None
+    return "", None, None
 
 
 class _MockLlm(infer.MultimodalLlmWrapper):
@@ -903,6 +927,111 @@ class ModuleAblationTest(absltest.TestCase, _AdbMockMixin):
     agent.flush_memory("goal")
     self.assertFalse(agent._certified)  # not flipped by re-cert
     self.assertEqual(len(llm.calls), 0)
+
+
+class MemoryNodeTest(absltest.TestCase):
+  """Memory-as-agent node: one extra 'mem' LLM pass that distills memory."""
+
+  def test_perceive_returns_distilled_text_and_tracks_mem_module(self):
+    llm = _ModuleRecordingLlm(["- click the alarm field first"])
+    node = memory_agent.MemoryNode(llm)
+    out = node.perceive(
+        goal="set alarm 07:00",
+        ui_elements_list="[0] text='Alarm'",
+        memory_context="U1: app open\nU2: shape hint",
+    )
+    self.assertEqual(out, "- click the alarm field first")
+    # Prompt carried the goal / screen / raw memory.
+    prompt = llm.prompts[0]
+    self.assertIn("set alarm 07:00", prompt)
+    self.assertIn("[0] text='Alarm'", prompt)
+    self.assertIn("U2: shape hint", prompt)
+    # Charged to the dedicated mem module.
+    self.assertEqual(llm.modules, ["mem"])
+    # end_module cleared the tag.
+    self.assertIsNone(llm.module)
+
+  def test_perceive_failsafe_empty_on_empty_output(self):
+    llm = _ModuleRecordingLlm([""])
+    node = memory_agent.MemoryNode(llm)
+    self.assertEqual(
+        node.perceive("g", "screen", "ctx"), ""
+    )
+
+  def test_perceive_failsafe_empty_on_empty_context_in_prompt(self):
+    llm = _ModuleRecordingLlm([""])
+    node = memory_agent.MemoryNode(llm)
+    node.perceive("g", "", "")
+    # Prompt must not be malformed when ui/context are missing.
+    self.assertIn("Not available", llm.prompts[0])
+    self.assertIn("No memory", llm.prompts[0])
+
+
+class MemAsAgentSwitchTest(absltest.TestCase):
+  """_build_action_prompt switch: static injection vs MemoryNode distillation."""
+
+  def _agent(self, llm, memory_blocks):
+    from unittest import mock
+    env = mock.MagicMock()
+    ag = memory_agent.MemoryAugmentedAgent(
+        env=env, llm=llm, mem_as_agent=True)
+    ag.mem_as_agent = True
+    ag._mem_node = memory_agent.MemoryNode(llm)
+    ag._collect_memory_blocks = lambda g, u, keep_titles: list(memory_blocks)
+    return ag
+
+  def test_off_injects_static_blocks_and_no_mem_call(self):
+    from android_world.agents import m3a
+    from unittest import mock
+    llm = _ModuleRecordingLlm(["would be distilled"])
+    ag = memory_agent.MemoryAugmentedAgent(
+        env=mock.MagicMock(), llm=llm, mem_as_agent=False)
+    ag._collect_memory_blocks = lambda g, u, keep_titles: [
+        "## Task State (U1)\napp=markor"]
+    with mock.patch.object(m3a, "_action_selection_prompt",
+                           return_value="R") as asp:
+      ag._build_action_prompt("g", [], "[0]")
+      g = asp.call_args[0][0]
+    self.assertIn("Task State (U1)", g)
+    self.assertEqual(llm.modules, [])  # static: no LLM call
+
+  def test_on_injects_node_block_and_counts_mem(self):
+    from android_world.agents import m3a
+    from unittest import mock
+    llm = _ModuleRecordingLlm(["- click save now"])
+    ag = self._agent(llm, ["app=markor, page=editor"])
+    with mock.patch.object(m3a, "_action_selection_prompt",
+                           return_value="R") as asp:
+      ag._build_action_prompt("g", [], "[0]")
+      g = asp.call_args[0][0]
+    self.assertIn("Memory (node)", g)
+    self.assertIn("click save now", g)
+    self.assertEqual(llm.modules, ["mem"])  # node call charged to mem
+
+  def test_node_skipped_when_no_memory(self):
+    from android_world.agents import m3a
+    from unittest import mock
+    llm = _ModuleRecordingLlm([])
+    ag = self._agent(llm, [])
+    with mock.patch.object(m3a, "_action_selection_prompt",
+                           return_value="R") as asp:
+      ag._build_action_prompt("g", [], "[0]")
+      g = asp.call_args[0][0]
+    self.assertEqual(g, "g")  # no memory -> pure goal
+    self.assertEqual(llm.modules, [])  # node NOT called
+
+  def test_node_empty_output_injects_no_raw_fallback(self):
+    # Regression: node returns empty -> NO raw untitled blocks leak in.
+    from android_world.agents import m3a
+    from unittest import mock
+    llm = _ModuleRecordingLlm([""])
+    ag = self._agent(llm, ["app=markor, page=editor"])
+    with mock.patch.object(m3a, "_action_selection_prompt",
+                           return_value="R") as asp:
+      ag._build_action_prompt("g", [], "[0]")
+      g = asp.call_args[0][0]
+    self.assertEqual(g, "g")  # no raw fallback
+    self.assertEqual(llm.modules, ["mem"])  # node WAS called (once)
 
 
 if __name__ == "__main__":

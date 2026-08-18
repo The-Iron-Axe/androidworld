@@ -116,6 +116,57 @@ _SLOT_FILL_PROMPT_TEMPLATE = (
 )
 
 
+MEMORY_NODE_PROMPT = (
+    "You are a memory keeper agent for an Android GUI agent.\n"
+    "You receive the task goal, the current screen, and raw memory context\n"
+    "from several long-term memory stores.  Distill them into a SHORT set of\n"
+    "actionable guidance lines the main agent should follow for THIS step.\n"
+    "Keep only what is relevant to the current step; drop noise.  Prefer the\n"
+    "task-specific memory over generic guidance when they conflict.\n\n"
+    "Task goal: {goal}\n\n"
+    "Current screen UI elements:\n{ui_elements}\n\n"
+    "Raw memory context:\n{memory_context}\n\n"
+    "Reply as a plain bullet list of guidance.  No preamble, no JSON.\n"
+    "Your guidance:\n"
+)
+
+
+class MemoryNode:
+  """Memory-as-agent: a standalone LLM pass that digests raw memory context.
+
+  Instead of injecting U1-U4 raw blocks straight into the action prompt
+  (single-module static injection), this node calls the LLM once per step to
+  distill the raw memory into short actionable guidance.  The extra call is
+  charged to a dedicated 'mem' module so its cost shows up separately in the
+  per-module call accounting.  Pure-text (no screenshot) per the design.
+  """
+
+  def __init__(self, llm: infer.MultimodalLlmWrapper):
+    self._llm = llm
+
+  def perceive(self, goal: str, ui_elements_list: str,
+               memory_context: str) -> str:
+    """Distill raw memory context into actionable guidance for this step.
+
+    Returns the distilled text, or '' on any failure so the caller's action
+    loop is never blocked by the memory node.
+    """
+    prompt = MEMORY_NODE_PROMPT.format(
+        goal=goal,
+        ui_elements=ui_elements_list if ui_elements_list else "Not available",
+        memory_context=memory_context if memory_context else "No memory",
+    )
+    self._llm.begin_module('mem')
+    try:
+      output, _is_safe, _raw = self._llm.predict_mm(prompt, [])
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      logging.warning("MemoryNode — LLM failed: %s", e)
+      return ""
+    finally:
+      self._llm.end_module()
+    return (output or "").strip()
+
+
 class MemoryAugmentedAgent(m3a_lib.M3A):
   """M3A augmented with orthogonal memory modules.
 
@@ -144,6 +195,7 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       u3_persistence_dir: str = "",
       u4_persistence_dir: str = "",
       rag_url: str | None = None,
+      mem_as_agent: bool = False,
       name: str = "MemoryAugmentedAgent",
       wait_after_action_seconds: float = 2.0,
       screenshot_scale: float = 1.0,
@@ -154,6 +206,10 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self.enable_u3 = enable_u3
     self.enable_u4 = enable_u4
     self.screenshot_scale = screenshot_scale
+    # Memory-as-agent switch: when on, U1-U4 context is distilled by a
+    # standalone MemoryNode LLM pass instead of injected raw (static).
+    self.mem_as_agent = mem_as_agent
+    self._mem_node = MemoryNode(llm) if mem_as_agent else None
 
     # ── Memory state (pure data) ──
     self.u1: TaskState | None = None
@@ -243,7 +299,47 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       history_lines: list[str],
       ui_elements_list: str,
   ) -> str:
-    """Insert U1/U2/U3 memory blocks above the history."""
+    """Insert U1/U2/U3 memory blocks above the history.
+
+    When mem_as_agent is on, the raw memory blocks are first distilled by the
+    standalone MemoryNode into short actionable guidance; otherwise they are
+    injected verbatim (static single-module injection).
+    """
+    memory_blocks = self._collect_memory_blocks(
+        goal, ui_elements_list, keep_titles=not self.mem_as_agent
+    )
+
+    if self.mem_as_agent and self._mem_node is not None:
+      if memory_blocks:
+        # The node digests the raw memory; its output is the ONLY memory the
+        # main agent sees.  If it produces nothing (empty/failure), inject no
+        # memory block — never fall back to the raw (untitled) blocks, which
+        # would silently turn arm C into a degraded static-injection state.
+        memory_context = "\n\n".join(memory_blocks)
+        distilled = self._mem_node.perceive(
+            goal, ui_elements_list, memory_context
+        )
+        memory_blocks = [f"## Memory (node)\n{distilled}"] if distilled else []
+
+    # Prepend memory blocks to the goal so they appear before the history
+    # in the parent's prompt template.  This avoids any format-string issues
+    # because the parent template only uses {goal} as a placeholder.
+    if memory_blocks:
+      augmented_goal = "\n\n".join(memory_blocks) + "\n\nGoal: " + goal
+    else:
+      augmented_goal = goal
+
+    return m3a_lib._action_selection_prompt(
+        augmented_goal,
+        history_lines,
+        ui_elements_list,
+        self.additional_guidelines,
+    )
+
+  def _collect_memory_blocks(
+      self, goal: str, ui_elements_list: str, keep_titles: bool
+  ) -> list[str]:
+    """Gather U1-U4 memory context.  Titles kept for static injection."""
     memory_blocks: list[str] = []
 
     if self.enable_u1:
@@ -251,7 +347,8 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
         self.u1 = init_task_state(getattr(self, "_current_goal", "") or goal)
       u1_text = format_u1_context(self.u1)
       if u1_text:
-        memory_blocks.append(f"## Task State (U1)\n{u1_text}")
+        title = "## Task State (U1)\n" if keep_titles else ""
+        memory_blocks.append(f"{title}{u1_text}")
 
     if self.enable_u2 and self.u2 is not None:
       # Use the clean task goal (never the Plan-block-prefixed prompt goal) as
@@ -268,7 +365,9 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
           retrieve_goal, precondition=precondition or None
       )
       if hint:
-        memory_blocks.append(f"## Memory Hint (U2)\nSimilar past trajectory: {hint}")
+        text = f"Similar past trajectory: {hint}"
+        title = "## Memory Hint (U2)\n" if keep_titles else ""
+        memory_blocks.append(f"{title}{text}")
 
     if self.enable_u3 and self.u3 is not None:
       app = self.u1.current_app if self.u1 is not None else ""
@@ -279,7 +378,8 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
           current_page=page,
       )
       if u3_text:
-        memory_blocks.append(f"## Environment Knowledge (U3)\n{u3_text}")
+        title = "## Environment Knowledge (U3)\n" if keep_titles else ""
+        memory_blocks.append(f"{title}{u3_text}")
 
     if self.enable_u4 and self.u4 is not None:
       app = self.u1.current_app if self.u1 is not None else ""
@@ -287,25 +387,14 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       retrieve_goal = getattr(self, "_current_goal", "") or goal
       blocks = self.u4.retrieve_blocks(retrieve_goal, precondition=page)
       if blocks["positive"]:
-        memory_blocks.append(f"## Procedural Skill (U4)\n{blocks['positive']}")
+        title = "## Procedural Skill (U4)\n" if keep_titles else ""
+        memory_blocks.append(f"{title}{blocks['positive']}")
       if blocks["negative"]:
         # Negative skills are avoidance guidance — "don't do it this way".
-        memory_blocks.append(f"## Avoid (U4)\n{blocks['negative']}")
+        title = "## Avoid (U4)\n" if keep_titles else ""
+        memory_blocks.append(f"{title}{blocks['negative']}")
 
-    # Prepend memory blocks to the goal so they appear before the history
-    # in the parent's prompt template.  This avoids any format-string issues
-    # because the parent template only uses {goal} as a placeholder.
-    if memory_blocks:
-      augmented_goal = "\n\n".join(memory_blocks) + "\n\nGoal: " + goal
-    else:
-      augmented_goal = goal
-
-    return m3a_lib._action_selection_prompt(
-        augmented_goal,
-        history_lines,
-        ui_elements_list,
-        self.additional_guidelines,
-    )
+    return memory_blocks
 
   # ── Hook: update memory state after each successful step (U1, U3) ────
 

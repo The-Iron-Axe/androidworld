@@ -48,12 +48,18 @@
 ## 5. 建议的实验臂(推荐方案)
 
 **主对比(两臂)**:
-| 臂 | 记忆形态 | 记忆访问成本 |
-|---|---|---|
-| A 静态注入(现状) | U1-U4 直接注入 action prompt | ≈ 0(除 U2 slot-fill) |
-| C 记忆保管者 | 独立 agent 节点,自循环、prompt 隔离 | 每次访问 +1 次 LLM |
+| 臂 | 记忆形态 | 记忆访问成本 | 启动命令 |
+|---|---|---|---|
+| A 静态注入(现状) | U1-U4 直接注入 action prompt | ≈ 0(除 U2 slot-fill) | `--multiagent --configs=u1234` |
+| C 记忆保管者 | MemoryNode 独立节点,每步一次 LLM 加工 | 每次访问 +1 次 LLM(`mem` 模块) | `--multiagent --configs=u1234 --mem_as_agent` |
 
-**B 等成本对照(可选,审稿强化)**:在 A 上加等成本额外决策调用,预算对齐 A/C。**先不做**,作为审稿人质疑 confounder 时的补强实验。
+**MemoryNode 已实现**(2026-08-18):
+- `memory_agent.py::MemoryNode` — 独立 prompt `MEMORY_NODE_PROMPT`,经 `begin_module('mem')` 计费,失败 fail-safe 返回空串。
+- `MemoryAugmentedAgent.mem_as_agent` 开关:开时 `_build_action_prompt` 把 U1-U4 原始上下文交给 MemoryNode 蒸馏成单段 `## Memory (node)`;关时走静态注入(现状不变)。
+- 开关透传:ablation `--mem_as_agent`、run.py `--mem_as_agent`,经 `**kwargs` 一路传给 MemoryAugmentedAgent。
+- 单元测试:`multi_agent_test.py::MemoryNodeTest`(3 例),全套 51 例通过。
+
+**B 等成本对照(可选,审稿强化)**:在 A 上加等成本额外决策调用,预算对齐 A/C。**先不做**。
 
 **为什么先不做 B**:主问题由 A vs C 直接回答;若差异本就不显著,B 纯属浪费;若显著,B 再补。避免一开始就背上多一条对照臂的 token 开销。
 
@@ -92,12 +98,11 @@
 
 ## 9. 明确不做的范围
 
-- **不实现记忆保管者**(用户已选"先设计 + 不写代码")。
-- 记忆保管者的实现本身非小事(新 agent 节点、消息接口、独立 prompt、U1-U4 需可被保管者访问而非直接注入)——等用户决定写代码时,那是另一个规划周期。
-- 不新增 arm B 的实现,仅作为方案中的可选强化。
+- **不做 arm B**(等成本对照)——仅作为可选强化保留;用户已确认忽略。
+- **不做多轮 MemoryNode 对话循环/消息接口**——当前实现是"每步一次 node 加工 LLM"的最小可测形态,足以支撑 arm A vs arm C 主对比。
 
-## 10. 待用户拍板的最近下一步
+## 10. 落地后待办
 
-1. 主对比 A vs C 是否采用(本方案默认)。
-2. 确认是否要把"记忆成本明细"作为新维度写进 ablation 结果 JSON(设计上已确认要;落地时需在 suite_utils / ablation 里加字段)。
-3. 是否现在产物就按 arm A / arm C 的结果 JSON 结构预排,等将来要跑时直接复用。
+1. **冒烟实验**:同一 `--multiagent --configs=u1234` 跑 1 seed,关/开 `--mem_as_agent` 各一遍;确认 arm C 每步比 arm A 多出 `mem` 模块调用(计数正确),成功率可对比。
+2. 全量跑 A vs C(定 seed 数),产 trade-off 图。
+3. 可选:把"记忆成本明细"写进 ablation 结果 JSON(读/写次数、其中走 LLM 次数)。

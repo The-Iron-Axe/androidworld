@@ -431,6 +431,8 @@ def _run_task_suite(
       constants.EpisodeConstants.RUN_TIME,
       constants.EpisodeConstants.EXCEPTION_INFO,
       constants.EpisodeConstants.AUX_DATA,
+      constants.EpisodeConstants.TOKEN_USAGE,
+      constants.EpisodeConstants.MEMORY_STATS,
   ]
   completed_tasks, failed_tasks = _get_task_info(
       checkpointer.load(fields=metadata_fields)

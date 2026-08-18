@@ -143,6 +143,11 @@ flags.DEFINE_bool(
     'ma_no_ec', False,
     'Disable the Evidence Certifier module (completion veto, subgoal cert,'
     ' success fusion).')
+flags.DEFINE_bool(
+    'mem_as_agent', False,
+    'Distill the U1-U4 memory context through a standalone MemoryNode LLM '
+    'pass (memory-as-agent) instead of static single-module injection. '
+    'Charged to a dedicated mem module in the per-module call accounting.')
 
 
 # ── Memory construction flags ─────────────────────────────────────────
@@ -199,6 +204,7 @@ def _run_phase(
     run_id: str,
     store_stage: bool,
     enable_multiagent: bool = False,
+    mem_as_agent: bool = False,
     results_dir: str = '',
 ) -> list[dict]:
   """Run one phase.  Returns episode metadata.
@@ -236,6 +242,7 @@ def _run_phase(
       u3_persistence_dir=FLAGS.u3_store,
       u4_persistence_dir=FLAGS.u4_store,
       rag_url=rag_url,
+      mem_as_agent=mem_as_agent,
   )
   if enable_multiagent:
     agent_kwargs['enable_multiagent'] = True
@@ -495,13 +502,20 @@ def main(argv):
   _PROGRESS_DATA['run_id'] = run_id
   results_dir = FLAGS.results_dir.strip() or ''
   if results_dir:
-    # A config-named results dir (e.g. runs/u123) gets a per-run timestamp
-    # subfolder so multiple ablation runs of the same config never collide.
-    # Format matches checkpointer.create_run_directory so the folder looks
-    # like run_20260731T135847788342.
-    import datetime
-    ts = datetime.datetime.now().strftime('%Y%m%dT%H%M%S%f')
-    results_dir = os.path.join(_REPO_ROOT, results_dir, f'run_{ts}')
+    if FLAGS.run_id.strip():
+      # Resume mode: results_dir already names the existing run folder (e.g.
+      # runs/u123/run_20260731T135847788342). Do NOT append a fresh timestamp
+      # or the checkpointer would miss the prior checkpoints — completed
+      # episodes are skipped and failed ones rerun.
+      results_dir = os.path.join(_REPO_ROOT, results_dir)
+    else:
+      # A config-named results dir (e.g. runs/u123) gets a per-run timestamp
+      # subfolder so multiple ablation runs of the same config never collide.
+      # Format matches checkpointer.create_run_directory so the folder looks
+      # like run_20260731T135847788342.
+      import datetime
+      ts = datetime.datetime.now().strftime('%Y%m%dT%H%M%S%f')
+      results_dir = os.path.join(_REPO_ROOT, results_dir, f'run_{ts}')
   _install_run_logger(results_dir or _REPO_ROOT)
   print(f'Run ID: {run_id}')
   if results_dir:
@@ -572,6 +586,7 @@ def main(argv):
           env, suite, suite_utils, f'acc_r{r}_seed{seed}',
           True, True, u3_any, True, run_id, store_stage=True,
           enable_multiagent=FLAGS.multiagent,
+          mem_as_agent=FLAGS.mem_as_agent,
           results_dir=results_dir,
       )
 
@@ -591,6 +606,7 @@ def main(argv):
           spec['u1'], spec['u2'], spec['u3'], spec['u4'],
           run_id, store_stage=False,
           enable_multiagent=FLAGS.multiagent,
+          mem_as_agent=FLAGS.mem_as_agent,
           results_dir=results_dir,
       )
       across_seeds.setdefault(cfg, []).append(
