@@ -486,7 +486,7 @@ def _run_task_suite(
       if return_full_episode_data:
         full_episode_data.append(episode)
 
-      episodes_metadata.append({k: episode[k] for k in metadata_fields})
+      episodes_metadata.append({k: episode.get(k) for k in metadata_fields})
       process_episodes_fn(episodes_metadata, print_summary=True)
 
       if episode[constants.EpisodeConstants.EXCEPTION_INFO] is not None:

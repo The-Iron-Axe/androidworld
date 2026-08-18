@@ -234,10 +234,6 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self._replay_entry = None
     self._replay_index = 0
     self._replay_trajectory: list[ObsAct] = []
-    # U2 dual-factor precondition: the episode-start screen, frozen on first
-    # action prompt, used as the `pre` key for hint/replay retrieval so stored
-    # and queried Plan(pre, goal) keys stay aligned.
-    self._u2_precondition = ""
 
   # ── Per-episode memory stats (consumed by suite_utils for result files) ─
 
@@ -275,7 +271,6 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
     self._replay_entry = None
     self._replay_index = 0
     self._replay_trajectory = []
-    self._u2_precondition = ""
     for mem in (self.u2, self.u3, self.u4):
       if mem is None:
         continue
@@ -356,14 +351,15 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       # single-agent runs stored under (_current_goal).  A Plan prefix in the
       # key would degrade dual-factor similarity and break the 2x2 ablation
       # symmetry between the single- and multi-agent conditions.
-      # Dual-factor precondition (DMS §3.2.2): freeze the episode-start screen
-      # and pass it as `pre` so stored and queried Plan(pre, goal) keys stay
-      # aligned and cross-task matching can anchor on the starting UI.
+      #
+      # Retrieval is goal-only (no precondition): the episode-start screen
+      # dump differs between task instances, so sim(pre) × sim(goal) collapses
+      # below the retrieval threshold even when the goal matches well
+      # (measured 0.28 × 0.70 = 0.20 < 0.6).  Goal-only retrieval was the
+      # behavior of the 4/19 baseline and is what lets cross-instance memory
+      # transfer work.
       retrieve_goal = getattr(self, "_current_goal", "") or goal
-      precondition = self._u2_ensure_precondition(ui_elements_list)
-      hint = self.u2.retrieve_hint(
-          retrieve_goal, precondition=precondition or None
-      )
+      hint = self.u2.retrieve_hint(retrieve_goal)
       if hint:
         text = f"Similar past trajectory: {hint}"
         title = "## Memory Hint (U2)\n" if keep_titles else ""
@@ -507,39 +503,6 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return
     self._pending_trajectory_goal = goal
 
-  # ── U2 dual-factor precondition (episode-start screen key) ───────────
-
-  def _u2_ensure_precondition(self, ui_elements_list: str) -> str:
-    """Return the frozen episode-start screen key, capturing it on first call.
-
-    Called from _build_action_prompt with the current UI element list.  The
-    first call (episode start) freezes the screen text into
-    `self._u2_precondition`; the same key is then reused for every U2
-    store/retrieve within the episode, so stored and queried Plan(pre, goal)
-    keys stay aligned.
-    """
-    if not self._u2_precondition and ui_elements_list:
-      self._u2_precondition = build_screen_summary(ui_elements_list)[:2000]
-    return self._u2_precondition
-
-  def _current_screen_precondition(self) -> str:
-    """Build a screen key from the current env state (replay path).
-
-    The U2 replay check in step() runs before _build_action_prompt, so it must
-    capture the starting screen itself instead of reusing the prompt's UI list.
-    Uses a non-stabilized get_state to avoid an extra stabilization wait.
-    """
-    try:
-      state = self.env.get_state(wait_to_stabilize=False)
-      logical_screen_size = self.env.logical_screen_size
-      ui_list = m3a_lib._generate_ui_elements_description_list(
-          state.ui_elements, logical_screen_size
-      )
-      return build_screen_summary(ui_list)[:2000]
-    except Exception as e:  # pylint: disable=broad-exception-caught
-      logging.warning("U2 precondition capture failed: %s", e)
-      return ""
-
   # ── Sub-plan decomposition seam (Planner placeholder) ──────────────────
   #
   # This is the extension point for the future multi-agent design.  The
@@ -605,9 +568,11 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return
 
     if len(trajectory) > 1:
-      self.u2.add_trajectory(
-          goal, trajectory, precondition=self._u2_precondition or ""
-      )
+      # Goal-only storage (no precondition), matching goal-only retrieval:
+      # the stored Plan's precondition must stay empty so its embedding is
+      # the empty-string vector and sim(pre, pre)=1 on retrieval, reducing
+      # Score back to sim(goal).  See _build_action_prompt.
+      self.u2.add_trajectory(goal, trajectory)
       self.u2.finalize_task(goal, success=True)
 
   def _flush_u4_trajectory(self, success: bool) -> None:
@@ -904,17 +869,12 @@ class MemoryAugmentedAgent(m3a_lib.M3A):
       return base_agent.AgentInteractionResult(done, step_data)
 
     # First step of the task with U2 enabled: try deterministic replay for
-    # each sub-plan.
+    # each sub-plan.  Goal-only query (no precondition) — see the comment in
+    # _build_action_prompt for why the screen-dump precondition breaks
+    # cross-instance retrieval.
     if self.enable_u2 and self.u2 is not None and len(self.history) == 0:
-      # Replay runs before _build_action_prompt, so capture the episode-start
-      # screen key here — otherwise the replay query's Plan(pre, goal) would
-      # carry an empty `pre` and never match stored trajectories.
-      if not self._u2_precondition:
-        self._u2_precondition = self._current_screen_precondition()
       for plan in self._decompose_into_subplans(goal):
-        replay_plan = Plan(
-            precondition=self._u2_precondition or "", goal=plan.goal
-        )
+        replay_plan = Plan(precondition="", goal=plan.goal)
         trajectory = self.u2.retrieve_sub_plan_replay(replay_plan)
         if trajectory:
           self._start_replay(trajectory, self.u2._active_entry)
