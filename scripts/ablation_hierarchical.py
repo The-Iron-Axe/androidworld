@@ -438,10 +438,11 @@ def _save_results(results, phase, run_id, results_dir='') -> str:
   return path
 
 
-def _run_phase_and_save(env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage, enable_multiagent=False, results_dir=''):
+def _run_phase_and_save(env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage, enable_multiagent=False, mem_as_agent=False, results_dir=''):
   results = _run_phase(
       env, suite, suite_utils, phase, u1, u2, u3, u4, run_id, store_stage,
       enable_multiagent=enable_multiagent,
+      mem_as_agent=mem_as_agent,
       results_dir=results_dir,
   )
   _save_results(results, phase, run_id, results_dir)
